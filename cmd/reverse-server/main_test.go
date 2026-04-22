@@ -4,13 +4,15 @@ import (
   "net/http/httptest"
   "strings"
   "testing"
+
+  protocolvalidation "github.com/portflare/protocol/validation"
 )
 
 func TestIsValidAPIKey(t *testing.T) {
-  if !isValidAPIKey("pf_123") {
+  if !protocolvalidation.IsValidClientKey("pf_123") {
     t.Fatal("expected pf_ prefix to be accepted")
   }
-  if isValidAPIKey("abc123") {
+  if protocolvalidation.IsValidClientKey("abc123") {
     t.Fatal("expected missing pf_ prefix to be rejected")
   }
 }

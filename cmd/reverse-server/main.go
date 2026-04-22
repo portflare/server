@@ -26,6 +26,9 @@ import (
 
   "github.com/gorilla/websocket"
 
+  protocoltypes "github.com/portflare/protocol/types"
+  protocolvalidation "github.com/portflare/protocol/validation"
+
   "github.com/portflare/server/internal/buildinfo"
 )
 
@@ -109,29 +112,9 @@ type authIdentity struct {
   IsAdmin         bool
 }
 
-type TunnelRequest struct {
-  Type      string              `json:"type"`
-  RequestID string              `json:"request_id,omitempty"`
-  AppName   string              `json:"app_name,omitempty"`
-  Method    string              `json:"method,omitempty"`
-  URL       string              `json:"url,omitempty"`
-  Headers   map[string][]string `json:"headers,omitempty"`
-  BodyBase64 string             `json:"body_base64,omitempty"`
-}
+type TunnelRequest = protocoltypes.TunnelRequest
 
-type TunnelResponse struct {
-  Type       string              `json:"type"`
-  RequestID  string              `json:"request_id,omitempty"`
-  StatusCode int                 `json:"status_code,omitempty"`
-  Headers    map[string][]string `json:"headers,omitempty"`
-  BodyBase64 string              `json:"body_base64,omitempty"`
-  Error      string              `json:"error,omitempty"`
-  AppName    string              `json:"app_name,omitempty"`
-  PublicPort int                 `json:"public_port,omitempty"`
-  Approved   bool                `json:"approved,omitempty"`
-  UserName   string              `json:"user_name,omitempty"`
-  Message    string              `json:"message,omitempty"`
-}
+type TunnelResponse = protocoltypes.TunnelResponse
 
 type TunnelClient struct {
   userName string
@@ -515,15 +498,15 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
     }
 
     switch msg.Type {
-    case "register":
+    case protocoltypes.MessageTypeRegister:
       appName := slug(msg.AppName)
       if appName == "" {
-        _ = s.send(client, TunnelResponse{Type: "error", Error: "app_name is required"})
+        _ = s.send(client, TunnelResponse{Type: protocoltypes.MessageTypeError, Error: "app_name is required"})
         continue
       }
       app, err := s.upsertApp(user.UserName, appName, msg.PublicPort)
       if err != nil {
-        _ = s.send(client, TunnelResponse{Type: "register-ack", AppName: appName, Error: err.Error()})
+        _ = s.send(client, TunnelResponse{Type: protocoltypes.MessageTypeRegisterAck, AppName: appName, Error: err.Error()})
         continue
       }
       client.apps[appName] = &ConnectedApp{appName: appName, publicPort: app.PublicPort}
@@ -532,7 +515,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
           s.logger.Error("dynamic listener failed", "port", app.PublicPort, "error", err)
         }
       }
-      _ = s.send(client, TunnelResponse{Type: "register-ack", AppName: appName, PublicPort: app.PublicPort, Approved: app.Approved})
+      _ = s.send(client, TunnelResponse{Type: protocoltypes.MessageTypeRegisterAck, AppName: appName, PublicPort: app.PublicPort, Approved: app.Approved})
       s.notifyUISubscribers()
     case "response":
       s.pendingMu.Lock()
@@ -1058,7 +1041,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
   targetURL.Host = "local"
 
   reqMsg := TunnelRequest{
-    Type:       "request",
+    Type:       protocoltypes.MessageTypeRequest,
     RequestID:  requestID,
     AppName:    appName,
     Method:     r.Method,
@@ -1229,7 +1212,7 @@ func (s *Server) ensureUser(identity authIdentity) (*User, error) {
 }
 
 func (s *Server) findUserByKey(key string) (*User, bool) {
-  if !isValidAPIKey(key) {
+  if !protocolvalidation.IsValidClientKey(strings.TrimSpace(key)) {
     return nil, false
   }
   s.stateMu.RLock()
@@ -1365,10 +1348,6 @@ func randomToken(bytesLen int) string {
 
 func newAPIKey() string {
   return "pf_" + randomToken(24)
-}
-
-func isValidAPIKey(v string) bool {
-  return strings.HasPrefix(strings.TrimSpace(v), "pf_")
 }
 
 func subtleEqual(a, b string) bool {
