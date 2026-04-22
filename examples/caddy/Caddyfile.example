@@ -1,0 +1,29 @@
+{
+  email admin@example.test
+}
+
+# Public open app route: {app}-{user-label}.reverse.example.test
+# User dashboard route: {user-label}.reverse.example.test
+# Admin route: admin.reverse.example.test
+*.reverse.example.test {
+  @admin host admin.reverse.example.test
+  @userdash host *.reverse.example.test
+
+  reverse_proxy reverse-server:8080
+}
+
+# Admin and user dashboards should normally sit behind your auth layer.
+# Example only; wire this to your chosen auth mechanism and pass through:
+# - X-Auth-Request-User
+# - X-Auth-Request-Email
+#
+# Example split blocks for clarity:
+admin.reverse.example.test {
+  reverse_proxy reverse-server:8080
+}
+
+# Authenticated user dashboard
+# Replace this with your auth gateway or forward-auth setup.
+*.reverse.example.test {
+  reverse_proxy reverse-server:8080
+}
