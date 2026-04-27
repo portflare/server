@@ -393,6 +393,15 @@ func (s *Server) handleHostAware(w http.ResponseWriter, r *http.Request) {
     return
   }
 
+  if user, app, redirectHost, ok := s.matchAppHost(host); ok {
+    if redirectHost != "" {
+      http.Redirect(w, r, rewriteRequestURLHost(r, redirectHost), http.StatusTemporaryRedirect)
+      return
+    }
+    s.proxyToApp(w, r, user, app)
+    return
+  }
+
   if userLabelHost, ok := s.matchUserHost(host); ok {
     identity, ok := s.requireIdentity(w, r)
     if !ok {
@@ -412,15 +421,6 @@ func (s *Server) handleHostAware(w http.ResponseWriter, r *http.Request) {
       return
     }
     s.renderUserPage(w, r, identity, matchedUser.UserName)
-    return
-  }
-
-  if user, app, redirectHost, ok := s.matchAppHost(host); ok {
-    if redirectHost != "" {
-      http.Redirect(w, r, rewriteRequestURLHost(r, redirectHost), http.StatusTemporaryRedirect)
-      return
-    }
-    s.proxyToApp(w, r, user, app)
     return
   }
 

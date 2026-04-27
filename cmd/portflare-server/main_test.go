@@ -40,6 +40,28 @@ func TestMatchHosts(t *testing.T) {
   }
 }
 
+func TestHandleHostAwarePrefersAppHostBeforeUserHost(t *testing.T) {
+  srv := &Server{cfg: Config{PublicBaseDomain: "reverse.example.test"}, clients: map[string]*TunnelClient{}, state: State{
+    Users: map[string]*User{"alice-smith": {UserName: "alice-smith", PublicUserLabel: "alicesmith"}},
+    Apps:  map[string]*App{"alice-smith/web": {UserName: "alice-smith", AppName: "web", Approved: true}},
+  }}
+
+  rr := httptest.NewRecorder()
+  req := httptest.NewRequest("GET", "https://web-alicesmith.reverse.example.test/", nil)
+  req.Header.Set("X-Auth-Request-User", "alice-smith")
+  req.Header.Set("X-Auth-Request-Email", "alice@example.test")
+
+  srv.handleHostAware(rr, req)
+
+  body := rr.Body.String()
+  if rr.Code != 502 || !strings.Contains(body, "client is offline") {
+    t.Fatalf("expected app host to route to proxy path, got status=%d body=%s", rr.Code, body)
+  }
+  if strings.Contains(body, "user not found") {
+    t.Fatalf("app host was incorrectly handled as a user page: %s", body)
+  }
+}
+
 func TestSlug(t *testing.T) {
   got := slug("My App_3000")
   if got != "my-app-3000" {
