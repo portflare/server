@@ -54,23 +54,23 @@ type Config struct {
 
 func loadConfig() Config {
   return Config{
-    ListenAddr:       env("REVERSE_SERVER_LISTEN_ADDR", ":8080"),
-    PublicBaseDomain: strings.Trim(strings.ToLower(env("REVERSE_BASE_DOMAIN", "reverse.example.test")), "."),
-    StatePath:        env("REVERSE_STATE_PATH", "/var/lib/portflare/state.json"),
-    AdminUsers:       parseUserSet(env("REVERSE_ADMIN_USERS", "admin"), ","),
-    RegistrationOpen:     envBool("REVERSE_REGISTRATION_OPEN", true),
-    AllowUserAppApproval: envBool("REVERSE_ALLOW_USER_APP_APPROVAL", false),
-    AutoApproveForUsers:  envBool("REVERSE_AUTO_APPROVE_APPS_FOR_USERS", false),
-    AutoApproveForAdmins: envBool("REVERSE_AUTO_APPROVE_APPS_FOR_ADMINS", false),
-    TrustedProxyOnly:     envBool("REVERSE_TRUST_AUTH_HEADERS", true),
-    DisableAuth:      envBool("REVERSE_DISABLE_AUTH", false),
-    LocalDevUser:     env("REVERSE_LOCAL_DEV_USER", "localdev"),
-    LocalDevEmail:    env("REVERSE_LOCAL_DEV_EMAIL", "localdev@example.test"),
-    MaxBodyBytes:     envInt64("REVERSE_MAX_BODY_BYTES", 8<<20),
-    ReadTimeout:      envDuration("REVERSE_READ_TIMEOUT", 15*time.Second),
-    WriteTimeout:     envDuration("REVERSE_WRITE_TIMEOUT", 30*time.Second),
-    IdleTimeout:      envDuration("REVERSE_IDLE_TIMEOUT", 120*time.Second),
-    RequestTimeout:   envDuration("REVERSE_REQUEST_TIMEOUT", 60*time.Second),
+    ListenAddr:       env("PORTFLARE_SERVER_LISTEN_ADDR", ":8080"),
+    PublicBaseDomain: strings.Trim(strings.ToLower(env("PORTFLARE_BASE_DOMAIN", "reverse.example.test")), "."),
+    StatePath:        env("PORTFLARE_STATE_PATH", "/var/lib/portflare/state.json"),
+    AdminUsers:       parseUserSet(env("PORTFLARE_ADMIN_USERS", "admin"), ","),
+    RegistrationOpen:     envBool("PORTFLARE_REGISTRATION_OPEN", true),
+    AllowUserAppApproval: envBool("PORTFLARE_ALLOW_USER_APP_APPROVAL", false),
+    AutoApproveForUsers:  envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_USERS", false),
+    AutoApproveForAdmins: envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_ADMINS", false),
+    TrustedProxyOnly:     envBool("PORTFLARE_TRUST_AUTH_HEADERS", true),
+    DisableAuth:      envBool("PORTFLARE_DISABLE_AUTH", false),
+    LocalDevUser:     env("PORTFLARE_LOCAL_DEV_USER", "localdev"),
+    LocalDevEmail:    env("PORTFLARE_LOCAL_DEV_EMAIL", "localdev@example.test"),
+    MaxBodyBytes:     envInt64("PORTFLARE_MAX_BODY_BYTES", 8<<20),
+    ReadTimeout:      envDuration("PORTFLARE_READ_TIMEOUT", 15*time.Second),
+    WriteTimeout:     envDuration("PORTFLARE_WRITE_TIMEOUT", 30*time.Second),
+    IdleTimeout:      envDuration("PORTFLARE_IDLE_TIMEOUT", 120*time.Second),
+    RequestTimeout:   envDuration("PORTFLARE_REQUEST_TIMEOUT", 60*time.Second),
   }
 }
 
@@ -164,12 +164,12 @@ func main() {
   if len(os.Args) > 1 {
     switch os.Args[1] {
     case "version", "--version", "-version", "-v":
-      fmt.Println(buildinfo.Summary("reverse-server"))
+      fmt.Println(buildinfo.Summary("portflare-server"))
       return
     case "help", "--help", "-h":
       fmt.Println("usage:")
-      fmt.Println("  reverse-server")
-      fmt.Println("  reverse-server version")
+      fmt.Println("  portflare-server")
+      fmt.Println("  portflare-server version")
       return
     }
   }
@@ -193,7 +193,7 @@ func main() {
 
   go func() {
     version, commit, buildDate := buildinfo.Effective()
-    logger.Info("reverse server listening", "addr", cfg.ListenAddr, "base_domain", cfg.PublicBaseDomain, "version", version, "commit", commit, "build_date", buildDate)
+    logger.Info("portflare server listening", "addr", cfg.ListenAddr, "base_domain", cfg.PublicBaseDomain, "version", version, "commit", commit, "build_date", buildDate)
     if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
       logger.Error("http server failed", "error", err)
       os.Exit(1)

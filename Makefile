@@ -12,13 +12,13 @@ LDFLAGS := -s -w \
 	-X github.com/portflare/server/internal/buildinfo.Commit=$(COMMIT) \
 	-X github.com/portflare/server/internal/buildinfo.Date=$(BUILD_DATE)
 
-SERVER_PKG := ./cmd/reverse-server
+SERVER_PKG := ./cmd/portflare-server
 
 .PHONY: build release clean
 
 build:
 	mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/reverse-server $(SERVER_PKG)
+	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/portflare-server $(SERVER_PKG)
 
 release:
 	mkdir -p $(BIN_DIR) $(RELEASE_DIR)
@@ -27,7 +27,7 @@ release:
 		goarch="$${platform#*/}"; \
 		suffix=""; \
 		if [ "$${goos}" = "windows" ]; then suffix=".exe"; fi; \
-		server_bin="reverse-server-$${goos}-$${goarch}$${suffix}"; \
+		server_bin="portflare-server-$${goos}-$${goarch}$${suffix}"; \
 		archive_base="server-$${goos}-$${goarch}"; \
 		CGO_ENABLED=0 GOOS="$${goos}" GOARCH="$${goarch}" go build -ldflags '$(LDFLAGS)' -o "$(BIN_DIR)/$${server_bin}" $(SERVER_PKG); \
 		rm -rf "$(RELEASE_DIR)/$${archive_base}"; \

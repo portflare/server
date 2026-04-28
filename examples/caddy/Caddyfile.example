@@ -9,7 +9,7 @@
   @admin host admin.reverse.example.test
   @userdash host *.reverse.example.test
 
-  reverse_proxy reverse-server:8080
+  reverse_proxy portflare-server:8080
 }
 
 # Admin and user dashboards should normally sit behind your auth layer.
@@ -19,11 +19,11 @@
 #
 # Example split blocks for clarity:
 admin.reverse.example.test {
-  reverse_proxy reverse-server:8080
+  reverse_proxy portflare-server:8080
 }
 
 # Authenticated user dashboard
 # Replace this with your auth gateway or forward-auth setup.
 *.reverse.example.test {
-  reverse_proxy reverse-server:8080
+  reverse_proxy portflare-server:8080
 }
