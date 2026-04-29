@@ -26,8 +26,22 @@ export PORTFLARE_SERVER_LISTEN_ADDR=:8080
 export PORTFLARE_BASE_DOMAIN=reverse.example.test
 export PORTFLARE_STATE_PATH=./state.json
 export PORTFLARE_ADMIN_USERS=admin@example.com
+export PORTFLARE_TRAFFIC_STATS_INTERVAL=30s
 portflare-server
 ```
+
+## Traffic stats
+
+The server tracks per-user/per-app request counters in interval buckets. The current implementation uses an in-memory `TrafficStore`, so stats reset on restart and can later be backed by Prometheus, SQLite, or Postgres.
+
+```bash
+curl /api/me/traffic
+curl /api/me/traffic?app=web
+curl /api/admin/traffic
+curl /api/admin/traffic?user=alice-smith\&app=web
+```
+
+Empty buckets are not persisted or returned.
 
 For local testing without an auth proxy:
 
