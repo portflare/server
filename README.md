@@ -43,6 +43,18 @@ curl /api/admin/traffic?user=alice-smith\&app=web
 
 Empty buckets are not persisted or returned.
 
+## CLI registration
+
+When registration is open, unauthenticated clients can create a user and receive an API key:
+
+```bash
+curl -X POST http://localhost:8080/api/register \
+  -H 'content-type: application/json' \
+  -d '{"user_name":"alice","email":"alice@example.com"}'
+```
+
+The endpoint returns the API key once at creation time. Existing users receive `409 Conflict` so duplicate registration cannot leak a stored key.
+
 For local testing without an auth proxy:
 
 ```bash

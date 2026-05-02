@@ -135,6 +135,18 @@ type pendingResponse struct {
 	ch chan TunnelResponse
 }
 
+type RegistrationRequest struct {
+	UserName string `json:"user_name"`
+	Email    string `json:"email"`
+}
+
+type RegistrationResponse struct {
+	UserName        string `json:"user_name"`
+	PublicUserLabel string `json:"public_user_label"`
+	Email           string `json:"email,omitempty"`
+	APIKey          string `json:"api_key"`
+}
+
 type TrafficRecord struct {
 	UserName   string
 	AppName    string
@@ -439,6 +451,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	mux.HandleFunc("/api/register", s.handleRegister)
 	mux.HandleFunc("/connect", s.handleConnect)
 	mux.HandleFunc("/ws/ui", s.handleUIWebSocket)
 	mux.HandleFunc("/admin", s.handleAdminPage)
@@ -578,6 +591,64 @@ func (s *Server) handleHostAware(w http.ResponseWriter, r *http.Request) {
 		"app_url_example":    fmt.Sprintf("https://<app>-<user-label>.%s", s.cfg.PublicBaseDomain),
 		"local_path_example": "/r/<user>/<app>",
 	})
+}
+
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req RegistrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid registration request")
+		return
+	}
+
+	userName := slug(req.UserName)
+	if userName == "" {
+		writeError(w, http.StatusBadRequest, "user_name is required")
+		return
+	}
+	publicUserLabel := userLabel(userName)
+	if _, err := validateNormalizedPublicUserLabel(publicUserLabel); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	now := time.Now().UTC()
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.state.Users == nil {
+		s.state.Users = map[string]*User{}
+	}
+	if !s.state.RegistrationOpen {
+		writeError(w, http.StatusForbidden, "registration is closed")
+		return
+	}
+	if _, ok := s.state.Users[userName]; ok {
+		writeError(w, http.StatusConflict, "user already exists")
+		return
+	}
+	for _, existing := range s.state.Users {
+		if existing.UserName == userName {
+			continue
+		}
+		if existing.PublicUserLabel == publicUserLabel || containsUserLabel(existing.PublicUserAliases, publicUserLabel) {
+			writeError(w, http.StatusConflict, "public user label is already in use")
+			return
+		}
+	}
+
+	user := &User{UserName: userName, PublicUserLabel: publicUserLabel, Email: email, APIKey: newAPIKey(), CreatedAt: now, UpdatedAt: now}
+	s.state.Users[userName] = user
+	if err := s.saveStateLocked(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.notifyUISubscribers()
+	writeJSON(w, http.StatusCreated, RegistrationResponse{UserName: user.UserName, PublicUserLabel: user.PublicUserLabel, Email: user.Email, APIKey: user.APIKey})
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
