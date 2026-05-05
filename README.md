@@ -30,6 +30,16 @@ export PORTFLARE_TRAFFIC_STATS_INTERVAL=30s
 portflare-server
 ```
 
+## Readiness
+
+The server exposes readiness and build metadata:
+
+```bash
+curl http://localhost:8080/readyz
+```
+
+The response includes the application name, effective version, commit, build time, Go version, and `runtime/debug.ReadBuildInfo` module/settings/dependency data.
+
 ## Traffic stats
 
 The server tracks per-user/per-app request counters in interval buckets. The current implementation uses an in-memory `TrafficStore`, so stats reset on restart and can later be backed by Prometheus, SQLite, or Postgres.
