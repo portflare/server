@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -77,12 +78,13 @@ func loadConfig() Config {
 }
 
 type State struct {
-	RegistrationOpen     bool             `json:"registration_open"`
-	AllowUserAppApproval bool             `json:"allow_user_app_approval"`
-	AutoApproveForUsers  bool             `json:"auto_approve_for_users"`
-	AutoApproveForAdmins bool             `json:"auto_approve_for_admins"`
-	Users                map[string]*User `json:"users"`
-	Apps                 map[string]*App  `json:"apps"`
+	RegistrationOpen     bool                    `json:"registration_open"`
+	AllowUserAppApproval bool                    `json:"allow_user_app_approval"`
+	AutoApproveForUsers  bool                    `json:"auto_approve_for_users"`
+	AutoApproveForAdmins bool                    `json:"auto_approve_for_admins"`
+	Users                map[string]*User        `json:"users"`
+	Apps                 map[string]*App         `json:"apps"`
+	AbuseReports         map[string]*AbuseReport `json:"abuse_reports,omitempty"`
 }
 
 type User struct {
@@ -105,6 +107,25 @@ type App struct {
 	LastSeenAt time.Time `json:"last_seen_at"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type AbuseReport struct {
+	ID                string    `json:"id"`
+	ReportedURL       string    `json:"reported_url"`
+	ReportedHost      string    `json:"reported_host,omitempty"`
+	ReportedPath      string    `json:"reported_path,omitempty"`
+	ReportedUserName  string    `json:"reported_user_name,omitempty"`
+	ReportedUserLabel string    `json:"reported_user_label,omitempty"`
+	ReportedAppName   string    `json:"reported_app_name,omitempty"`
+	Category          string    `json:"category"`
+	Description       string    `json:"description"`
+	Context           string    `json:"context,omitempty"`
+	ReporterContact   string    `json:"reporter_contact,omitempty"`
+	ReporterIP        string    `json:"reporter_ip"`
+	ReporterUserAgent string    `json:"reporter_user_agent,omitempty"`
+	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type authIdentity struct {
@@ -289,7 +310,8 @@ type Server struct {
 	uiSubsMu      sync.Mutex
 	uiSubscribers map[chan struct{}]struct{}
 
-	traffic TrafficStore
+	traffic      TrafficStore
+	abuseLimiter *abuseReportLimiter
 }
 
 const (
@@ -363,6 +385,7 @@ func newServer(cfg Config, logger *slog.Logger) (*Server, error) {
 		listeners:     map[int]net.Listener{},
 		uiSubscribers: map[chan struct{}]struct{}{},
 		traffic:       newMemoryTrafficStore(cfg.TrafficStatsInterval),
+		abuseLimiter:  newAbuseReportLimiter(abuseReportLimitPerWindow, abuseReportThrottleWindow),
 	}
 
 	if err := s.loadState(); err != nil {
@@ -385,7 +408,7 @@ func (s *Server) loadState() error {
 	raw, err := os.ReadFile(s.cfg.StatePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			s.state = State{RegistrationOpen: s.cfg.RegistrationOpen, AllowUserAppApproval: s.cfg.AllowUserAppApproval, AutoApproveForUsers: s.cfg.AutoApproveForUsers, AutoApproveForAdmins: s.cfg.AutoApproveForAdmins, Users: map[string]*User{}, Apps: map[string]*App{}}
+			s.state = State{RegistrationOpen: s.cfg.RegistrationOpen, AllowUserAppApproval: s.cfg.AllowUserAppApproval, AutoApproveForUsers: s.cfg.AutoApproveForUsers, AutoApproveForAdmins: s.cfg.AutoApproveForAdmins, Users: map[string]*User{}, Apps: map[string]*App{}, AbuseReports: map[string]*AbuseReport{}}
 			return s.saveStateLocked()
 		}
 		return fmt.Errorf("read state: %w", err)
@@ -400,6 +423,9 @@ func (s *Server) loadState() error {
 	}
 	if st.Apps == nil {
 		st.Apps = map[string]*App{}
+	}
+	if st.AbuseReports == nil {
+		st.AbuseReports = map[string]*AbuseReport{}
 	}
 	changed := false
 	seenLabels := map[string]string{}
@@ -453,6 +479,8 @@ func (s *Server) routes() http.Handler {
 	})
 	mux.HandleFunc("/readyz", handleReadyz("portflare-server"))
 	mux.HandleFunc(learnMorePath, s.handleLearnMorePage)
+	mux.HandleFunc(reportPath, s.handleReportAbuseForm)
+	mux.HandleFunc("/api/report-abuse", s.handleReportAbuseAPI)
 	mux.HandleFunc("/api/register", s.handleRegister)
 	mux.HandleFunc("/connect", s.handleConnect)
 	mux.HandleFunc("/ws/ui", s.handleUIWebSocket)
@@ -605,6 +633,355 @@ func (s *Server) handleLearnMorePage(w http.ResponseWriter, r *http.Request) {
 		"BaseDomain":     s.cfg.PublicBaseDomain,
 		"ReportAbuseURL": reportPath,
 	})
+}
+
+func (s *Server) handleReportAbuseForm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "report_abuse", map[string]any{
+		"ReportedURL": strings.TrimSpace(r.URL.Query().Get("url")),
+		"Context":     strings.TrimSpace(r.URL.Query().Get("context")),
+		"Categories":  abuseReportCategories(),
+	})
+}
+
+type abuseReportInput struct {
+	ReportedURL     string `json:"reported_url"`
+	Category        string `json:"category"`
+	Description     string `json:"description"`
+	ReporterContact string `json:"reporter_contact"`
+	Context         string `json:"context"`
+	Website         string `json:"website"`
+}
+
+type resolvedReportedURL struct {
+	URL       string
+	Host      string
+	Path      string
+	UserName  string
+	UserLabel string
+	AppName   string
+}
+
+func (s *Server) handleReportAbuseAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	input, status, err := parseAbuseReportInput(r)
+	if err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	if strings.TrimSpace(input.Website) != "" {
+		writeError(w, http.StatusBadRequest, "invalid report")
+		return
+	}
+
+	resolved, err := s.validateAbuseReportInput(input, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	reporterIP := requestClientIP(r)
+	if reporterIP == "" {
+		reporterIP = "unknown"
+	}
+	limiter := s.ensureAbuseLimiter()
+	if !limiter.Allow(reporterIP + "|" + resolved.URL) {
+		writeError(w, http.StatusTooManyRequests, "too many reports; try again later")
+		return
+	}
+
+	now := time.Now().UTC()
+	report := &AbuseReport{
+		ReportedURL:       resolved.URL,
+		ReportedHost:      resolved.Host,
+		ReportedPath:      resolved.Path,
+		ReportedUserName:  resolved.UserName,
+		ReportedUserLabel: resolved.UserLabel,
+		ReportedAppName:   resolved.AppName,
+		Category:          strings.TrimSpace(input.Category),
+		Description:       strings.TrimSpace(input.Description),
+		Context:           strings.TrimSpace(input.Context),
+		ReporterContact:   strings.TrimSpace(input.ReporterContact),
+		ReporterIP:        reporterIP,
+		ReporterUserAgent: strings.TrimSpace(r.UserAgent()),
+		Status:            abuseReportStatusNew,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	s.stateMu.Lock()
+	if s.state.AbuseReports == nil {
+		s.state.AbuseReports = map[string]*AbuseReport{}
+	}
+	report.ID = s.newAbuseReportIDLocked()
+	s.state.AbuseReports[report.ID] = report
+	err = s.saveStateLocked()
+	s.stateMu.Unlock()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not save report")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{"case_id": report.ID})
+}
+
+func parseAbuseReportInput(r *http.Request) (abuseReportInput, int, error) {
+	var input abuseReportInput
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxAbuseReportBodyBytes+1))
+	if err != nil {
+		return input, http.StatusBadRequest, errors.New("invalid report request")
+	}
+	if int64(len(raw)) > maxAbuseReportBodyBytes {
+		return input, http.StatusRequestEntityTooLarge, errors.New("report body is too large")
+	}
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
+	if contentType == "application/json" {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		if err := dec.Decode(&input); err != nil {
+			return input, http.StatusBadRequest, errors.New("invalid report request")
+		}
+		var extra any
+		if err := dec.Decode(&extra); err != io.EOF {
+			return input, http.StatusBadRequest, errors.New("invalid report request")
+		}
+		return input, http.StatusOK, nil
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if err := r.ParseForm(); err != nil {
+		return input, http.StatusBadRequest, errors.New("invalid report request")
+	}
+	input = abuseReportInput{
+		ReportedURL:     r.Form.Get("reported_url"),
+		Category:        r.Form.Get("category"),
+		Description:     r.Form.Get("description"),
+		ReporterContact: r.Form.Get("reporter_contact"),
+		Context:         r.Form.Get("context"),
+		Website:         r.Form.Get("website"),
+	}
+	return input, http.StatusOK, nil
+}
+
+func (s *Server) validateAbuseReportInput(input abuseReportInput, r *http.Request) (resolvedReportedURL, error) {
+	reportedURL := strings.TrimSpace(input.ReportedURL)
+	category := strings.TrimSpace(input.Category)
+	description := strings.TrimSpace(input.Description)
+	contact := strings.TrimSpace(input.ReporterContact)
+	contextValue := strings.TrimSpace(input.Context)
+
+	if reportedURL == "" {
+		return resolvedReportedURL{}, errors.New("reported_url is required")
+	}
+	if len(reportedURL) > maxAbuseReportURLLen {
+		return resolvedReportedURL{}, fmt.Errorf("reported_url must be at most %d bytes", maxAbuseReportURLLen)
+	}
+	if !isAllowedAbuseReportCategory(category) {
+		return resolvedReportedURL{}, errors.New("category is invalid")
+	}
+	if description == "" {
+		return resolvedReportedURL{}, errors.New("description is required")
+	}
+	if len(description) > maxAbuseReportDescriptionLen {
+		return resolvedReportedURL{}, fmt.Errorf("description must be at most %d bytes", maxAbuseReportDescriptionLen)
+	}
+	if len(contact) > maxAbuseReportContactLen {
+		return resolvedReportedURL{}, fmt.Errorf("reporter_contact must be at most %d bytes", maxAbuseReportContactLen)
+	}
+	if strings.ContainsAny(contact, "\r\n") {
+		return resolvedReportedURL{}, errors.New("reporter_contact is invalid")
+	}
+	if len(contextValue) > maxAbuseReportContextLen {
+		return resolvedReportedURL{}, fmt.Errorf("context must be at most %d bytes", maxAbuseReportContextLen)
+	}
+
+	resolved, err := s.resolveReportedURL(reportedURL, r)
+	if err != nil {
+		return resolvedReportedURL{}, err
+	}
+	return resolved, nil
+}
+
+func abuseReportCategories() []map[string]string {
+	return []map[string]string{
+		{"Value": "phishing", "Label": "Phishing or credential theft"},
+		{"Value": "malware", "Label": "Malware or harmful downloads"},
+		{"Value": "child_safety", "Label": "Child safety or CSAM"},
+		{"Value": "harassment", "Label": "Harassment or threats"},
+		{"Value": "spam", "Label": "Spam or scams"},
+		{"Value": "copyright", "Label": "Copyright or IP concern"},
+		{"Value": "privacy", "Label": "Privacy leak"},
+		{"Value": "other", "Label": "Other abuse"},
+	}
+}
+
+func isAllowedAbuseReportCategory(category string) bool {
+	for _, item := range abuseReportCategories() {
+		if item["Value"] == category {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) resolveReportedURL(raw string, r *http.Request) (resolvedReportedURL, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "/") {
+		parsed, err := neturl.ParseRequestURI(raw)
+		if err != nil || parsed.Path == "" {
+			return resolvedReportedURL{}, errors.New("reported_url is invalid")
+		}
+		resolved, err := s.resolveReportedRoute(parsed.Path)
+		if err != nil {
+			return resolvedReportedURL{}, err
+		}
+		absolute := s.publicServiceBaseURL(r) + parsed.RequestURI()
+		resolved.URL = absolute
+		resolved.Host = canonicalHost(s.cfg.PublicBaseDomain)
+		return resolved, nil
+	}
+
+	parsed, err := neturl.Parse(raw)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return resolvedReportedURL{}, errors.New("reported_url is invalid")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return resolvedReportedURL{}, errors.New("reported_url must be http or https")
+	}
+	host := canonicalHost(parsed.Host)
+	if !s.isPortflareHost(host) {
+		return resolvedReportedURL{}, errors.New("reported_url must be a Portflare URL")
+	}
+	parsed.Host = host
+	parsed.Fragment = ""
+
+	resolved := resolvedReportedURL{URL: parsed.String(), Host: host, Path: parsed.EscapedPath()}
+	if resolved.Path == "" {
+		resolved.Path = "/"
+	}
+	if route, err := s.resolveReportedRoute(parsed.Path); err == nil {
+		route.URL = resolved.URL
+		route.Host = host
+		return route, nil
+	}
+	if userName, appName, _, ok := s.matchAppHost(host); ok {
+		resolved.UserName = userName
+		resolved.AppName = appName
+		s.stateMu.RLock()
+		if user := s.state.Users[userName]; user != nil {
+			resolved.UserLabel = user.PublicUserLabel
+		}
+		s.stateMu.RUnlock()
+	}
+	return resolved, nil
+}
+
+func (s *Server) isPortflareHost(host string) bool {
+	base := canonicalHost(s.cfg.PublicBaseDomain)
+	return host == base || strings.HasSuffix(host, "."+base)
+}
+
+func (s *Server) resolveReportedRoute(path string) (resolvedReportedURL, error) {
+	parts := strings.Split(strings.TrimPrefix(path, "/r/"), "/")
+	if !strings.HasPrefix(path, "/r/") || len(parts) < 2 || slug(parts[0]) == "" || slug(parts[1]) == "" {
+		return resolvedReportedURL{}, errors.New("reported_url must be under /r/<user>/<app> or the Portflare base domain")
+	}
+	userName := slug(parts[0])
+	appName := slug(parts[1])
+	resolved := resolvedReportedURL{Path: path, UserName: userName, AppName: appName}
+	s.stateMu.RLock()
+	if user := s.state.Users[userName]; user != nil {
+		resolved.UserLabel = user.PublicUserLabel
+	}
+	s.stateMu.RUnlock()
+	return resolved, nil
+}
+
+func requestClientIP(r *http.Request) string {
+	for _, raw := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
+		if ip := strings.TrimSpace(raw); ip != "" {
+			return ip
+		}
+	}
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	host := strings.TrimSpace(r.RemoteAddr)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		return parsedHost
+	}
+	return host
+}
+
+func (s *Server) ensureAbuseLimiter() *abuseReportLimiter {
+	if s.abuseLimiter != nil {
+		return s.abuseLimiter
+	}
+	s.abuseLimiter = newAbuseReportLimiter(abuseReportLimitPerWindow, abuseReportThrottleWindow)
+	return s.abuseLimiter
+}
+
+func (s *Server) newAbuseReportIDLocked() string {
+	for {
+		id := "abr_" + randomToken(8)
+		if _, exists := s.state.AbuseReports[id]; !exists {
+			return id
+		}
+	}
+}
+
+type abuseReportLimiter struct {
+	mu      sync.Mutex
+	limit   int
+	window  time.Duration
+	entries map[string][]time.Time
+	now     func() time.Time
+}
+
+func newAbuseReportLimiter(limit int, window time.Duration) *abuseReportLimiter {
+	if limit <= 0 {
+		limit = abuseReportLimitPerWindow
+	}
+	if window <= 0 {
+		window = abuseReportThrottleWindow
+	}
+	return &abuseReportLimiter{
+		limit:   limit,
+		window:  window,
+		entries: map[string][]time.Time{},
+		now:     func() time.Time { return time.Now().UTC() },
+	}
+}
+
+func (l *abuseReportLimiter) Allow(key string) bool {
+	if l == nil {
+		return true
+	}
+	now := l.now()
+	cutoff := now.Add(-l.window)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	recent := l.entries[key][:0]
+	for _, at := range l.entries[key] {
+		if at.After(cutoff) {
+			recent = append(recent, at)
+		}
+	}
+	if len(recent) >= l.limit {
+		l.entries[key] = recent
+		return false
+	}
+	recent = append(recent, now)
+	l.entries[key] = recent
+	return true
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -1319,6 +1696,16 @@ const (
 	reportAbuseHeaderName = "X-Portflare-Report-Abuse"
 	appHeaderName         = "X-Portflare-App"
 	userHeaderName        = "X-Portflare-User"
+
+	maxAbuseReportBodyBytes      = 32 << 10
+	maxAbuseReportURLLen         = 2048
+	maxAbuseReportDescriptionLen = 4000
+	maxAbuseReportContactLen     = 320
+	maxAbuseReportContextLen     = 1000
+	abuseReportLimitPerWindow    = 5
+	abuseReportThrottleWindow    = 10 * time.Minute
+
+	abuseReportStatusNew = "new"
 )
 
 func (d responseDecorationDecision) String() string {
@@ -2155,6 +2542,51 @@ func requestScheme(r *http.Request) string {
 }
 
 const dashboardTemplates = `
+{{define "report_abuse"}}
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Report abuse</title>
+    <style>
+      body { color: #17202a; font-family: sans-serif; line-height: 1.55; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+      label { display: block; font-weight: 600; margin-top: 1rem; }
+      input, select, textarea { box-sizing: border-box; display: block; font: inherit; margin-top: .3rem; padding: .55rem; width: 100%; }
+      textarea { min-height: 9rem; }
+      button { margin-top: 1rem; padding: .65rem .85rem; }
+      .muted { color: #5f6b76; }
+      .hp { left: -10000px; position: absolute; top: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Report abuse</h1>
+    <p>Portflare routes traffic for independently operated apps. Reports may be shared with the site operator as needed to investigate abuse.</p>
+    <p class="muted">Do not submit passwords, API keys, private tokens, or other secrets. If there is imminent danger, contact local emergency services.</p>
+    <form method="post" action="/api/report-abuse">
+      <label>Reported URL
+        <input type="text" name="reported_url" value="{{.ReportedURL}}" maxlength="2048" required>
+      </label>
+      <label>Category
+        <select name="category" required>
+          {{range .Categories}}<option value="{{index . "Value"}}">{{index . "Label"}}</option>{{end}}
+        </select>
+      </label>
+      <label>Description
+        <textarea name="description" maxlength="4000" required>{{.Context}}</textarea>
+      </label>
+      <label>Reporter contact (optional)
+        <input type="text" name="reporter_contact" maxlength="320" autocomplete="email">
+      </label>
+      <label class="hp">Website
+        <input type="text" name="website" tabindex="-1" autocomplete="off">
+      </label>
+      <input type="hidden" name="context" value="{{.Context}}">
+      <button type="submit">Submit report</button>
+    </form>
+  </body>
+</html>
+{{end}}
+
 {{define "learn_more"}}
 <!doctype html>
 <html>
