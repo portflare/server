@@ -258,6 +258,13 @@ type TrafficStore interface {
 	QueryTraffic(query TrafficQuery) ([]TrafficBucket, error)
 }
 
+type ObservabilitySnapshot struct {
+	DecorationInjected         uint64            `json:"decoration_injected"`
+	DecorationHeaderOnly       uint64            `json:"decoration_header_only"`
+	DecorationSkippedByReason  map[string]uint64 `json:"decoration_skipped_by_reason"`
+	ReportsSubmittedByCategory map[string]uint64 `json:"reports_submitted_by_category"`
+}
+
 type memoryTrafficStore struct {
 	mu       sync.RWMutex
 	interval time.Duration
@@ -362,8 +369,10 @@ type Server struct {
 	uiSubsMu      sync.Mutex
 	uiSubscribers map[chan struct{}]struct{}
 
-	traffic      TrafficStore
-	abuseLimiter *abuseReportLimiter
+	traffic         TrafficStore
+	abuseLimiter    *abuseReportLimiter
+	observabilityMu sync.RWMutex
+	observability   ObservabilitySnapshot
 }
 
 const (
@@ -892,9 +901,11 @@ func (s *Server) handleReportAbuseAPI(w http.ResponseWriter, r *http.Request) {
 	if s.state.AbuseReports == nil {
 		s.state.AbuseReports = map[string]*AbuseReport{}
 	}
+	coalesced := false
 	if existing := s.findDuplicateAbuseReportLocked(report); existing != nil {
 		coalesceDuplicateAbuseReport(existing, report, now)
 		report = existing
+		coalesced = true
 	} else {
 		report.ID = s.newAbuseReportIDLocked()
 		s.state.AbuseReports[report.ID] = report
@@ -906,6 +917,16 @@ func (s *Server) handleReportAbuseAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.notifyUISubscribers()
+	s.recordReportSubmissionObservation(reportSubmissionObservation{
+		ReportID:       report.ID,
+		Category:       category,
+		AppPublicID:    report.ReportedAppName,
+		UserPublicID:   report.ReportedUserLabel,
+		ReportedHost:   report.ReportedHost,
+		ReportedPath:   report.ReportedPath,
+		ReporterIPHash: hashForLog(reporterIP),
+		Coalesced:      coalesced,
+	})
 
 	writeJSON(w, http.StatusCreated, map[string]string{"case_id": report.ID})
 }
@@ -1629,6 +1650,7 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 		"served_by_app_override_options":    servedByAppOverrideOptions(),
 		"abuse_report_status_options":       abuseReportStatusOptions(),
 		"abuse_report_category_options":     abuseReportCategories(),
+		"observability":                     s.observabilitySnapshot(),
 		"users":                             users,
 		"apps":                              apps,
 		"abuse_reports":                     abuseReports,
@@ -2814,6 +2836,112 @@ func (s *Server) recordTraffic(userName, appName string, statusCode int, bytesIn
 	})
 }
 
+type decorationObservation struct {
+	AppPublicID  string
+	UserPublicID string
+	Decision     responseDecorationDecision
+	Reason       string
+	ContentType  string
+	Status       int
+	SizeBucket   string
+}
+
+type reportSubmissionObservation struct {
+	ReportID       string
+	Category       string
+	AppPublicID    string
+	UserPublicID   string
+	ReportedHost   string
+	ReportedPath   string
+	ReporterIPHash string
+	Coalesced      bool
+}
+
+func (s *Server) recordDecorationObservation(obs decorationObservation) {
+	obs.AppPublicID = safePublicIDForLog(obs.AppPublicID)
+	obs.UserPublicID = safePublicIDForLog(obs.UserPublicID)
+	obs.Reason = safeReasonForLog(obs.Reason)
+	obs.ContentType = safeContentTypeForLog(obs.ContentType)
+	if obs.SizeBucket == "" {
+		obs.SizeBucket = "unknown"
+	}
+
+	s.observabilityMu.Lock()
+	if s.observability.DecorationSkippedByReason == nil {
+		s.observability.DecorationSkippedByReason = map[string]uint64{}
+	}
+	switch obs.Decision {
+	case responseDecorationHTMLInject:
+		s.observability.DecorationInjected++
+	case responseDecorationHeaderOnly:
+		s.observability.DecorationHeaderOnly++
+	case responseDecorationSkip:
+		s.observability.DecorationSkippedByReason[obs.Reason]++
+	}
+	s.observabilityMu.Unlock()
+
+	if s.logger != nil {
+		s.logger.Info("served_by_decoration",
+			"app_public_id", obs.AppPublicID,
+			"user_public_id", obs.UserPublicID,
+			"decision", obs.Decision.String(),
+			"reason", obs.Reason,
+			"content_type", obs.ContentType,
+			"status", obs.Status,
+			"size_bucket", obs.SizeBucket,
+		)
+	}
+}
+
+func (s *Server) recordReportSubmissionObservation(obs reportSubmissionObservation) {
+	obs.ReportID = sanitizeLogValue(obs.ReportID, maxLogIDBytes)
+	obs.Category = safeReasonForLog(obs.Category)
+	obs.AppPublicID = safePublicIDForLog(obs.AppPublicID)
+	obs.UserPublicID = safePublicIDForLog(obs.UserPublicID)
+	obs.ReportedHost = safeHostForLog(obs.ReportedHost)
+	obs.ReportedPath = safePathForLog(obs.ReportedPath)
+	obs.ReporterIPHash = sanitizeLogValue(obs.ReporterIPHash, maxLogHashBytes)
+
+	s.observabilityMu.Lock()
+	if s.observability.ReportsSubmittedByCategory == nil {
+		s.observability.ReportsSubmittedByCategory = map[string]uint64{}
+	}
+	s.observability.ReportsSubmittedByCategory[obs.Category]++
+	s.observabilityMu.Unlock()
+
+	if s.logger != nil {
+		s.logger.Info("abuse_report_submitted",
+			"report_id", obs.ReportID,
+			"category", obs.Category,
+			"app_public_id", obs.AppPublicID,
+			"user_public_id", obs.UserPublicID,
+			"reported_host", obs.ReportedHost,
+			"reported_path", obs.ReportedPath,
+			"reporter_ip_hash", obs.ReporterIPHash,
+			"coalesced", obs.Coalesced,
+		)
+	}
+}
+
+func (s *Server) observabilitySnapshot() ObservabilitySnapshot {
+	s.observabilityMu.RLock()
+	defer s.observabilityMu.RUnlock()
+	return ObservabilitySnapshot{
+		DecorationInjected:         s.observability.DecorationInjected,
+		DecorationHeaderOnly:       s.observability.DecorationHeaderOnly,
+		DecorationSkippedByReason:  cloneUint64Map(s.observability.DecorationSkippedByReason),
+		ReportsSubmittedByCategory: cloneUint64Map(s.observability.ReportsSubmittedByCategory),
+	}
+}
+
+func cloneUint64Map(src map[string]uint64) map[string]uint64 {
+	dst := make(map[string]uint64, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
 type responseDecorationDecision string
 
 const (
@@ -2865,6 +2993,27 @@ const (
 	abuseReportStatusDuplicate         = "duplicate"
 	abuseReportStatusEscalatedLegal    = "escalated_legal"
 	abuseReportStatusClosed            = "closed"
+
+	decorationReasonEligibleHTML    = "eligible_html"
+	decorationReasonUpgrade         = "upgrade"
+	decorationReasonDisabled        = "disabled"
+	decorationReasonNoBody          = "no_body"
+	decorationReasonHeadersOnlyMode = "headers_only_mode"
+	decorationReasonMethod          = "method"
+	decorationReasonStatus          = "status"
+	decorationReasonAttachment      = "attachment"
+	decorationReasonContentEncoding = "content_encoding"
+	decorationReasonContentType     = "content_type"
+	decorationReasonEmptyBody       = "empty_body"
+	decorationReasonInvalidBody     = "invalid_upstream_body"
+	decorationReasonUnknown         = "unknown"
+
+	maxLogPathBytes        = 180
+	maxLogHostBytes        = 128
+	maxLogIDBytes          = 80
+	maxLogHashBytes        = 80
+	maxLogReasonBytes      = 80
+	maxLogContentTypeBytes = 128
 )
 
 func (d responseDecorationDecision) String() string {
@@ -3083,11 +3232,17 @@ type preparedProxiedResponse struct {
 	headers  http.Header
 	body     []byte
 	decision responseDecorationDecision
+	reason   string
 }
 
 type servedByAffordance struct {
 	LearnMoreURL   string
 	ReportAbuseURL string
+}
+
+type responseDecorationClassification struct {
+	Decision responseDecorationDecision
+	Reason   string
 }
 
 func prepareProxiedResponse(r *http.Request, resp TunnelResponse, affordance servedByAffordance) (preparedProxiedResponse, error) {
@@ -3109,7 +3264,8 @@ func prepareProxiedResponseWithSettings(r *http.Request, resp TunnelResponse, af
 		return preparedProxiedResponse{}, err
 	}
 
-	decision := classifyProxiedResponse(r, status, resp.Headers, payload, settings)
+	classification := classifyProxiedResponse(r, status, resp.Headers, payload, settings)
+	decision := classification.Decision
 	headers := filteredProxiedResponseHeaders(resp.Headers)
 	body := payload
 	payloadChanged := false
@@ -3138,41 +3294,42 @@ func prepareProxiedResponseWithSettings(r *http.Request, resp TunnelResponse, af
 		headers:  headers,
 		body:     body,
 		decision: decision,
+		reason:   classification.Reason,
 	}, nil
 }
 
-func classifyProxiedResponse(r *http.Request, status int, headers http.Header, payload []byte, settings servedBySettings) responseDecorationDecision {
+func classifyProxiedResponse(r *http.Request, status int, headers http.Header, payload []byte, settings servedBySettings) responseDecorationClassification {
 	if isUpgradeRequest(r) || isUpgradeResponse(status, headers) {
-		return responseDecorationSkip
+		return responseDecorationClassification{Decision: responseDecorationSkip, Reason: decorationReasonUpgrade}
 	}
 	if !settings.Enabled {
-		return responseDecorationSkip
+		return responseDecorationClassification{Decision: responseDecorationSkip, Reason: decorationReasonDisabled}
 	}
 	if !responseCanHaveBody(r.Method, status) {
-		return responseDecorationHeaderOnly
+		return responseDecorationClassification{Decision: responseDecorationHeaderOnly, Reason: decorationReasonNoBody}
 	}
 	if settings.Mode == servedByModeHeadersOnly || !settings.HTMLInjectionEnabled {
-		return responseDecorationHeaderOnly
+		return responseDecorationClassification{Decision: responseDecorationHeaderOnly, Reason: decorationReasonHeadersOnlyMode}
 	}
 	if r.Method != http.MethodGet {
-		return responseDecorationHeaderOnly
+		return responseDecorationClassification{Decision: responseDecorationHeaderOnly, Reason: decorationReasonMethod}
 	}
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return responseDecorationHeaderOnly
+		return responseDecorationClassification{Decision: responseDecorationHeaderOnly, Reason: decorationReasonStatus}
 	}
 	if isAttachment(headers.Get("Content-Disposition")) {
-		return responseDecorationHeaderOnly
+		return responseDecorationClassification{Decision: responseDecorationHeaderOnly, Reason: decorationReasonAttachment}
 	}
 	if hasUnsafeContentEncoding(headers.Get("Content-Encoding")) {
-		return responseDecorationHeaderOnly
+		return responseDecorationClassification{Decision: responseDecorationHeaderOnly, Reason: decorationReasonContentEncoding}
 	}
 	if !isHTMLContentType(headers.Get("Content-Type")) {
-		return responseDecorationHeaderOnly
+		return responseDecorationClassification{Decision: responseDecorationHeaderOnly, Reason: decorationReasonContentType}
 	}
 	if len(payload) == 0 {
-		return responseDecorationHeaderOnly
+		return responseDecorationClassification{Decision: responseDecorationHeaderOnly, Reason: decorationReasonEmptyBody}
 	}
-	return responseDecorationHTMLInject
+	return responseDecorationClassification{Decision: responseDecorationHTMLInject, Reason: decorationReasonEligibleHTML}
 }
 
 func responseCanHaveBody(method string, status int) bool {
@@ -3452,11 +3609,29 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 		affordance := s.servedByAffordance(r, appName, publicUserLabel, settings)
 		prepared, err := prepareProxiedResponseWithSettings(r, resp, affordance, settings)
 		if err != nil {
+			s.recordDecorationObservation(decorationObservation{
+				AppPublicID:  appName,
+				UserPublicID: publicUserLabel,
+				Decision:     responseDecorationSkip,
+				Reason:       decorationReasonInvalidBody,
+				ContentType:  http.Header(resp.Headers).Get("Content-Type"),
+				Status:       http.StatusBadGateway,
+				SizeBucket:   "unknown",
+			})
 			s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
 			s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 			writeError(w, http.StatusBadGateway, "invalid upstream response")
 			return
 		}
+		s.recordDecorationObservation(decorationObservation{
+			AppPublicID:  appName,
+			UserPublicID: publicUserLabel,
+			Decision:     prepared.decision,
+			Reason:       prepared.reason,
+			ContentType:  http.Header(resp.Headers).Get("Content-Type"),
+			Status:       prepared.status,
+			SizeBucket:   responseSizeBucket(len(prepared.body)),
+		})
 		if prepared.decision != responseDecorationSkip {
 			s.addPortflareFallbackHeaders(prepared.headers, r, appName, publicUserLabel, settings)
 		}
@@ -3703,8 +3878,17 @@ func withLogging(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		next.ServeHTTP(w, r)
-		logger.Info("request", "method", r.Method, "path", r.URL.Path, "host", r.Host, "duration", time.Since(started))
+		if logger != nil {
+			logger.Info("request", "method", r.Method, "path", safeRequestPathForLog(r), "host", safeHostForLog(r.Host), "query", redactedQueryState(r), "duration", time.Since(started))
+		}
 	})
+}
+
+func redactedQueryState(r *http.Request) string {
+	if r == nil || r.URL == nil || r.URL.RawQuery == "" {
+		return "none"
+	}
+	return "redacted"
 }
 
 func cloneHeader(h http.Header) map[string][]string {
@@ -3715,6 +3899,102 @@ func cloneHeader(h http.Header) map[string][]string {
 		out[k] = cp
 	}
 	return out
+}
+
+func safeRequestPathForLog(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	return safePathForLog(r.URL.EscapedPath())
+}
+
+func safePathForLog(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "/"
+	}
+	if idx := strings.IndexAny(path, "?#"); idx >= 0 {
+		path = path[:idx]
+	}
+	return sanitizeLogValue(path, maxLogPathBytes)
+}
+
+func safeHostForLog(host string) string {
+	return sanitizeLogValue(canonicalHost(host), maxLogHostBytes)
+}
+
+func safePublicIDForLog(id string) string {
+	if normalized := slug(id); normalized != "" {
+		return normalized
+	}
+	if isSafePublicUserLabel(id) {
+		return id
+	}
+	return ""
+}
+
+func safeReasonForLog(reason string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	if reason == "" {
+		reason = decorationReasonUnknown
+	}
+	var b strings.Builder
+	for _, r := range reason {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return decorationReasonUnknown
+	}
+	return sanitizeLogValue(b.String(), maxLogReasonBytes)
+}
+
+func safeContentTypeForLog(contentType string) string {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if mediaType == "" {
+		return "unknown"
+	}
+	return sanitizeLogValue(mediaType, maxLogContentTypeBytes)
+}
+
+func responseSizeBucket(size int) string {
+	switch {
+	case size <= 0:
+		return "0"
+	case size <= 1024:
+		return "1-1KiB"
+	case size <= 10*1024:
+		return "1KiB-10KiB"
+	case size <= 100*1024:
+		return "10KiB-100KiB"
+	case size <= 1024*1024:
+		return "100KiB-1MiB"
+	default:
+		return "1MiB+"
+	}
+}
+
+func hashForLog(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func sanitizeLogValue(value string, maxBytes int) string {
+	value = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	return value[:maxBytes] + "..."
 }
 
 func handleReadyz(application string) http.HandlerFunc {
