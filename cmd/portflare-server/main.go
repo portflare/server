@@ -35,57 +35,69 @@ import (
 )
 
 type Config struct {
-	ListenAddr           string
-	PublicBaseDomain     string
-	StatePath            string
-	AdminUsers           map[string]struct{}
-	RegistrationOpen     bool
-	AllowUserAppApproval bool
-	AutoApproveForUsers  bool
-	AutoApproveForAdmins bool
-	TrustedProxyOnly     bool
-	DisableAuth          bool
-	LocalDevUser         string
-	LocalDevEmail        string
-	MaxBodyBytes         int64
-	ReadTimeout          time.Duration
-	WriteTimeout         time.Duration
-	IdleTimeout          time.Duration
-	RequestTimeout       time.Duration
-	TrafficStatsInterval time.Duration
+	ListenAddr                   string
+	PublicBaseDomain             string
+	StatePath                    string
+	AdminUsers                   map[string]struct{}
+	RegistrationOpen             bool
+	AllowUserAppApproval         bool
+	AutoApproveForUsers          bool
+	AutoApproveForAdmins         bool
+	ServedByEnabled              bool
+	ServedByMode                 string
+	ServedByHTMLInjectionEnabled bool
+	ReportAbuseEnabled           bool
+	TrustedProxyOnly             bool
+	DisableAuth                  bool
+	LocalDevUser                 string
+	LocalDevEmail                string
+	MaxBodyBytes                 int64
+	ReadTimeout                  time.Duration
+	WriteTimeout                 time.Duration
+	IdleTimeout                  time.Duration
+	RequestTimeout               time.Duration
+	TrafficStatsInterval         time.Duration
 }
 
 func loadConfig() Config {
 	return Config{
-		ListenAddr:           env("PORTFLARE_SERVER_LISTEN_ADDR", ":8080"),
-		PublicBaseDomain:     strings.Trim(strings.ToLower(env("PORTFLARE_BASE_DOMAIN", "reverse.example.test")), "."),
-		StatePath:            env("PORTFLARE_STATE_PATH", "/var/lib/portflare/state.json"),
-		AdminUsers:           parseUserSet(env("PORTFLARE_ADMIN_USERS", "admin"), ","),
-		RegistrationOpen:     envBool("PORTFLARE_REGISTRATION_OPEN", true),
-		AllowUserAppApproval: envBool("PORTFLARE_ALLOW_USER_APP_APPROVAL", false),
-		AutoApproveForUsers:  envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_USERS", false),
-		AutoApproveForAdmins: envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_ADMINS", false),
-		TrustedProxyOnly:     envBool("PORTFLARE_TRUST_AUTH_HEADERS", true),
-		DisableAuth:          envBool("PORTFLARE_DISABLE_AUTH", false),
-		LocalDevUser:         env("PORTFLARE_LOCAL_DEV_USER", "localdev"),
-		LocalDevEmail:        env("PORTFLARE_LOCAL_DEV_EMAIL", "localdev@example.test"),
-		MaxBodyBytes:         envInt64("PORTFLARE_MAX_BODY_BYTES", 8<<20),
-		ReadTimeout:          envDuration("PORTFLARE_READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:         envDuration("PORTFLARE_WRITE_TIMEOUT", 30*time.Second),
-		IdleTimeout:          envDuration("PORTFLARE_IDLE_TIMEOUT", 120*time.Second),
-		RequestTimeout:       envDuration("PORTFLARE_REQUEST_TIMEOUT", 60*time.Second),
-		TrafficStatsInterval: envDuration("PORTFLARE_TRAFFIC_STATS_INTERVAL", 30*time.Second),
+		ListenAddr:                   env("PORTFLARE_SERVER_LISTEN_ADDR", ":8080"),
+		PublicBaseDomain:             strings.Trim(strings.ToLower(env("PORTFLARE_BASE_DOMAIN", "reverse.example.test")), "."),
+		StatePath:                    env("PORTFLARE_STATE_PATH", "/var/lib/portflare/state.json"),
+		AdminUsers:                   parseUserSet(env("PORTFLARE_ADMIN_USERS", "admin"), ","),
+		RegistrationOpen:             envBool("PORTFLARE_REGISTRATION_OPEN", true),
+		AllowUserAppApproval:         envBool("PORTFLARE_ALLOW_USER_APP_APPROVAL", false),
+		AutoApproveForUsers:          envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_USERS", false),
+		AutoApproveForAdmins:         envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_ADMINS", false),
+		ServedByEnabled:              envBool("PORTFLARE_SERVED_BY_ENABLED", true),
+		ServedByMode:                 envServedByMode("PORTFLARE_SERVED_BY_MODE", servedByModeVisibleAndHeaders),
+		ServedByHTMLInjectionEnabled: envBool("PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED", true),
+		ReportAbuseEnabled:           envBool("PORTFLARE_REPORT_ABUSE_ENABLED", true),
+		TrustedProxyOnly:             envBool("PORTFLARE_TRUST_AUTH_HEADERS", true),
+		DisableAuth:                  envBool("PORTFLARE_DISABLE_AUTH", false),
+		LocalDevUser:                 env("PORTFLARE_LOCAL_DEV_USER", "localdev"),
+		LocalDevEmail:                env("PORTFLARE_LOCAL_DEV_EMAIL", "localdev@example.test"),
+		MaxBodyBytes:                 envInt64("PORTFLARE_MAX_BODY_BYTES", 8<<20),
+		ReadTimeout:                  envDuration("PORTFLARE_READ_TIMEOUT", 15*time.Second),
+		WriteTimeout:                 envDuration("PORTFLARE_WRITE_TIMEOUT", 30*time.Second),
+		IdleTimeout:                  envDuration("PORTFLARE_IDLE_TIMEOUT", 120*time.Second),
+		RequestTimeout:               envDuration("PORTFLARE_REQUEST_TIMEOUT", 60*time.Second),
+		TrafficStatsInterval:         envDuration("PORTFLARE_TRAFFIC_STATS_INTERVAL", 30*time.Second),
 	}
 }
 
 type State struct {
-	RegistrationOpen     bool                    `json:"registration_open"`
-	AllowUserAppApproval bool                    `json:"allow_user_app_approval"`
-	AutoApproveForUsers  bool                    `json:"auto_approve_for_users"`
-	AutoApproveForAdmins bool                    `json:"auto_approve_for_admins"`
-	Users                map[string]*User        `json:"users"`
-	Apps                 map[string]*App         `json:"apps"`
-	AbuseReports         map[string]*AbuseReport `json:"abuse_reports,omitempty"`
+	RegistrationOpen             bool                    `json:"registration_open"`
+	AllowUserAppApproval         bool                    `json:"allow_user_app_approval"`
+	AutoApproveForUsers          bool                    `json:"auto_approve_for_users"`
+	AutoApproveForAdmins         bool                    `json:"auto_approve_for_admins"`
+	ServedByEnabled              bool                    `json:"served_by_enabled"`
+	ServedByMode                 string                  `json:"served_by_mode"`
+	ServedByHTMLInjectionEnabled bool                    `json:"served_by_html_injection_enabled"`
+	ReportAbuseEnabled           bool                    `json:"report_abuse_enabled"`
+	Users                        map[string]*User        `json:"users"`
+	Apps                         map[string]*App         `json:"apps"`
+	AbuseReports                 map[string]*AbuseReport `json:"abuse_reports,omitempty"`
 }
 
 type User struct {
@@ -409,7 +421,20 @@ func (s *Server) loadState() error {
 	raw, err := os.ReadFile(s.cfg.StatePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			s.state = State{RegistrationOpen: s.cfg.RegistrationOpen, AllowUserAppApproval: s.cfg.AllowUserAppApproval, AutoApproveForUsers: s.cfg.AutoApproveForUsers, AutoApproveForAdmins: s.cfg.AutoApproveForAdmins, Users: map[string]*User{}, Apps: map[string]*App{}, AbuseReports: map[string]*AbuseReport{}}
+			settings := defaultServedBySettingsFromConfig(s.cfg)
+			s.state = State{
+				RegistrationOpen:             s.cfg.RegistrationOpen,
+				AllowUserAppApproval:         s.cfg.AllowUserAppApproval,
+				AutoApproveForUsers:          s.cfg.AutoApproveForUsers,
+				AutoApproveForAdmins:         s.cfg.AutoApproveForAdmins,
+				ServedByEnabled:              settings.Enabled,
+				ServedByMode:                 settings.Mode,
+				ServedByHTMLInjectionEnabled: settings.HTMLInjectionEnabled,
+				ReportAbuseEnabled:           settings.ReportAbuseEnabled,
+				Users:                        map[string]*User{},
+				Apps:                         map[string]*App{},
+				AbuseReports:                 map[string]*AbuseReport{},
+			}
 			return s.saveStateLocked()
 		}
 		return fmt.Errorf("read state: %w", err)
@@ -418,6 +443,10 @@ func (s *Server) loadState() error {
 	var st State
 	if err := json.Unmarshal(raw, &st); err != nil {
 		return fmt.Errorf("decode state: %w", err)
+	}
+	var rawState map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawState); err != nil {
+		return fmt.Errorf("decode state metadata: %w", err)
 	}
 	if st.Users == nil {
 		st.Users = map[string]*User{}
@@ -429,6 +458,31 @@ func (s *Server) loadState() error {
 		st.AbuseReports = map[string]*AbuseReport{}
 	}
 	changed := false
+	defaultSettings := defaultServedBySettingsFromConfig(s.cfg)
+	if _, ok := rawState["served_by_enabled"]; !ok {
+		st.ServedByEnabled = defaultSettings.Enabled
+		changed = true
+	}
+	if _, ok := rawState["served_by_mode"]; !ok {
+		st.ServedByMode = defaultSettings.Mode
+		changed = true
+	} else if mode, ok := normalizeServedByMode(st.ServedByMode); ok {
+		if mode != st.ServedByMode {
+			st.ServedByMode = mode
+			changed = true
+		}
+	} else {
+		st.ServedByMode = defaultSettings.Mode
+		changed = true
+	}
+	if _, ok := rawState["served_by_html_injection_enabled"]; !ok {
+		st.ServedByHTMLInjectionEnabled = defaultSettings.HTMLInjectionEnabled
+		changed = true
+	}
+	if _, ok := rawState["report_abuse_enabled"]; !ok {
+		st.ReportAbuseEnabled = defaultSettings.ReportAbuseEnabled
+		changed = true
+	}
 	seenLabels := map[string]string{}
 	for key, user := range st.Users {
 		if user.PublicUserLabel == "" {
@@ -629,14 +683,20 @@ func (s *Server) handleLearnMorePage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	settings := s.currentServedBySettings()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.templates.ExecuteTemplate(w, "learn_more", map[string]any{
-		"BaseDomain":     s.cfg.PublicBaseDomain,
-		"ReportAbuseURL": reportPath,
+		"BaseDomain":         s.cfg.PublicBaseDomain,
+		"ReportAbuseEnabled": settings.ReportAbuseEnabled,
+		"ReportAbuseURL":     reportPath,
 	})
 }
 
 func (s *Server) handleReportAbuseForm(w http.ResponseWriter, r *http.Request) {
+	if !s.currentServedBySettings().ReportAbuseEnabled {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -668,6 +728,10 @@ type resolvedReportedURL struct {
 }
 
 func (s *Server) handleReportAbuseAPI(w http.ResponseWriter, r *http.Request) {
+	if !s.currentServedBySettings().ReportAbuseEnabled {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -1213,21 +1277,41 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 	allowUserAppApproval := s.state.AllowUserAppApproval
 	autoApproveForUsers := s.state.AutoApproveForUsers
 	autoApproveForAdmins := s.state.AutoApproveForAdmins
+	servedByEnabled := s.state.ServedByEnabled
+	servedByMode := s.state.ServedByMode
+	servedByHTMLInjectionEnabled := s.state.ServedByHTMLInjectionEnabled
+	reportAbuseEnabled := s.state.ReportAbuseEnabled
 	s.stateMu.RUnlock()
+	if mode, ok := normalizeServedByMode(servedByMode); ok {
+		servedByMode = mode
+	} else {
+		servedByMode = defaultServedBySettingsFromConfig(s.cfg).Mode
+	}
+	servedByWarnings := servedBySettingWarnings(servedBySettings{
+		Enabled:              servedByEnabled,
+		Mode:                 servedByMode,
+		HTMLInjectionEnabled: servedByHTMLInjectionEnabled,
+		ReportAbuseEnabled:   reportAbuseEnabled,
+	})
 
 	sort.Slice(users, func(i, j int) bool { return users[i].UserName < users[j].UserName })
 	sort.Slice(apps, func(i, j int) bool {
 		return fmt.Sprint(apps[i]["user_name"], "/", apps[i]["app_name"]) < fmt.Sprint(apps[j]["user_name"], "/", apps[j]["app_name"])
 	})
 	return map[string]any{
-		"identity":                map[string]any{"user_name": identity.UserName},
-		"registration_open":       registrationOpen,
-		"allow_user_app_approval": allowUserAppApproval,
-		"auto_approve_for_users":  autoApproveForUsers,
-		"auto_approve_for_admins": autoApproveForAdmins,
-		"users":                   users,
-		"apps":                    apps,
-		"base_domain":             s.cfg.PublicBaseDomain,
+		"identity":                         map[string]any{"user_name": identity.UserName},
+		"registration_open":                registrationOpen,
+		"allow_user_app_approval":          allowUserAppApproval,
+		"auto_approve_for_users":           autoApproveForUsers,
+		"auto_approve_for_admins":          autoApproveForAdmins,
+		"served_by_enabled":                servedByEnabled,
+		"served_by_mode":                   servedByMode,
+		"served_by_html_injection_enabled": servedByHTMLInjectionEnabled,
+		"report_abuse_enabled":             reportAbuseEnabled,
+		"served_by_warnings":               servedByWarnings,
+		"users":                            users,
+		"apps":                             apps,
+		"base_domain":                      s.cfg.PublicBaseDomain,
 	}
 }
 
@@ -1243,14 +1327,19 @@ func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 
 	data := s.adminViewData(identity)
 	_ = s.templates.ExecuteTemplate(w, "admin", map[string]any{
-		"Identity":             data["identity"].(map[string]any),
-		"RegistrationOpen":     data["registration_open"],
-		"AllowUserAppApproval": data["allow_user_app_approval"],
-		"AutoApproveForUsers":  data["auto_approve_for_users"],
-		"AutoApproveForAdmins": data["auto_approve_for_admins"],
-		"Users":                data["users"],
-		"Apps":                 data["apps"],
-		"BaseDomain":           data["base_domain"],
+		"Identity":                     data["identity"].(map[string]any),
+		"RegistrationOpen":             data["registration_open"],
+		"AllowUserAppApproval":         data["allow_user_app_approval"],
+		"AutoApproveForUsers":          data["auto_approve_for_users"],
+		"AutoApproveForAdmins":         data["auto_approve_for_admins"],
+		"ServedByEnabled":              data["served_by_enabled"],
+		"ServedByMode":                 data["served_by_mode"],
+		"ServedByHTMLInjectionEnabled": data["served_by_html_injection_enabled"],
+		"ReportAbuseEnabled":           data["report_abuse_enabled"],
+		"ServedByWarnings":             data["served_by_warnings"],
+		"Users":                        data["users"],
+		"Apps":                         data["apps"],
+		"BaseDomain":                   data["base_domain"],
 	})
 }
 
@@ -1350,22 +1439,86 @@ func (s *Server) handleToggleSetting(w http.ResponseWriter, r *http.Request) {
 	setting := strings.TrimSpace(r.Form.Get("setting"))
 
 	s.stateMu.Lock()
-	var value bool
+	var value any
 	switch setting {
 	case "allow_user_app_approval":
-		s.state.AllowUserAppApproval = !s.state.AllowUserAppApproval
+		parsed, err := settingBoolFormValue(r, s.state.AllowUserAppApproval)
+		if err != nil {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.state.AllowUserAppApproval = parsed
 		value = s.state.AllowUserAppApproval
 	case "auto_approve_for_users":
-		s.state.AutoApproveForUsers = !s.state.AutoApproveForUsers
+		parsed, err := settingBoolFormValue(r, s.state.AutoApproveForUsers)
+		if err != nil {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.state.AutoApproveForUsers = parsed
 		value = s.state.AutoApproveForUsers
 	case "auto_approve_for_admins":
-		s.state.AutoApproveForAdmins = !s.state.AutoApproveForAdmins
+		parsed, err := settingBoolFormValue(r, s.state.AutoApproveForAdmins)
+		if err != nil {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.state.AutoApproveForAdmins = parsed
 		value = s.state.AutoApproveForAdmins
+	case "served_by_enabled":
+		parsed, err := settingBoolFormValue(r, s.state.ServedByEnabled)
+		if err != nil {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.state.ServedByEnabled = parsed
+		value = s.state.ServedByEnabled
+	case "served_by_html_injection_enabled":
+		parsed, err := settingBoolFormValue(r, s.state.ServedByHTMLInjectionEnabled)
+		if err != nil {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.state.ServedByHTMLInjectionEnabled = parsed
+		value = s.state.ServedByHTMLInjectionEnabled
+	case "report_abuse_enabled":
+		parsed, err := settingBoolFormValue(r, s.state.ReportAbuseEnabled)
+		if err != nil {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.state.ReportAbuseEnabled = parsed
+		value = s.state.ReportAbuseEnabled
+	case "served_by_mode":
+		mode, ok := normalizeServedByMode(r.Form.Get("value"))
+		if !ok {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, "served_by_mode must be visible_and_headers or headers_only")
+			return
+		}
+		s.state.ServedByMode = mode
+		value = mode
 	default:
 		s.stateMu.Unlock()
 		writeError(w, http.StatusBadRequest, "unknown setting")
 		return
 	}
+	mode, ok := normalizeServedByMode(s.state.ServedByMode)
+	if !ok {
+		mode = defaultServedBySettingsFromConfig(s.cfg).Mode
+	}
+	warnings := servedBySettingWarnings(servedBySettings{
+		Enabled:              s.state.ServedByEnabled,
+		Mode:                 mode,
+		HTMLInjectionEnabled: s.state.ServedByHTMLInjectionEnabled,
+		ReportAbuseEnabled:   s.state.ReportAbuseEnabled,
+	})
 	err := s.saveStateLocked()
 	s.stateMu.Unlock()
 	if err != nil {
@@ -1374,7 +1527,7 @@ func (s *Server) handleToggleSetting(w http.ResponseWriter, r *http.Request) {
 	}
 	s.notifyUISubscribers()
 	if wantsJSON(r) {
-		writeJSON(w, http.StatusOK, map[string]any{"setting": setting, "value": value})
+		writeJSON(w, http.StatusOK, map[string]any{"setting": setting, "value": value, "warnings": warnings})
 		return
 	}
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
@@ -1688,6 +1841,9 @@ const (
 	responseDecorationHeaderOnly responseDecorationDecision = "header_only"
 	responseDecorationSkip       responseDecorationDecision = "skip"
 
+	servedByModeVisibleAndHeaders = "visible_and_headers"
+	servedByModeHeadersOnly       = "headers_only"
+
 	learnMorePath = "/about-portflare"
 	reportPath    = "/report-abuse"
 
@@ -1713,6 +1869,86 @@ func (d responseDecorationDecision) String() string {
 	return string(d)
 }
 
+type servedBySettings struct {
+	Enabled              bool
+	Mode                 string
+	HTMLInjectionEnabled bool
+	ReportAbuseEnabled   bool
+}
+
+func defaultServedBySettingsFromConfig(cfg Config) servedBySettings {
+	mode, ok := normalizeServedByMode(cfg.ServedByMode)
+	if !ok {
+		mode = servedByModeVisibleAndHeaders
+	}
+	settings := servedBySettings{
+		Enabled:              cfg.ServedByEnabled,
+		Mode:                 mode,
+		HTMLInjectionEnabled: cfg.ServedByHTMLInjectionEnabled,
+		ReportAbuseEnabled:   cfg.ReportAbuseEnabled,
+	}
+	if strings.TrimSpace(cfg.ServedByMode) == "" {
+		settings.Enabled = true
+		settings.HTMLInjectionEnabled = true
+		settings.ReportAbuseEnabled = true
+	}
+	return settings
+}
+
+func (s *Server) currentServedBySettings() servedBySettings {
+	defaults := defaultServedBySettingsFromConfig(s.cfg)
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	if strings.TrimSpace(s.state.ServedByMode) == "" {
+		return defaults
+	}
+	mode, ok := normalizeServedByMode(s.state.ServedByMode)
+	if !ok {
+		mode = defaults.Mode
+	}
+	return servedBySettings{
+		Enabled:              s.state.ServedByEnabled,
+		Mode:                 mode,
+		HTMLInjectionEnabled: s.state.ServedByHTMLInjectionEnabled,
+		ReportAbuseEnabled:   s.state.ReportAbuseEnabled,
+	}
+}
+
+func normalizeServedByMode(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case servedByModeVisibleAndHeaders:
+		return servedByModeVisibleAndHeaders, true
+	case servedByModeHeadersOnly:
+		return servedByModeHeadersOnly, true
+	default:
+		return "", false
+	}
+}
+
+func envServedByMode(key, fallback string) string {
+	if mode, ok := normalizeServedByMode(env(key, fallback)); ok {
+		return mode
+	}
+	return fallback
+}
+
+func servedBySettingWarnings(settings servedBySettings) []string {
+	warnings := []string{}
+	if !settings.Enabled {
+		warnings = append(warnings, "Disabling served-by removes public disclosure headers and visible notices from proxied apps.")
+	}
+	if settings.Enabled && settings.Mode == servedByModeHeadersOnly {
+		warnings = append(warnings, "Headers-only served-by mode removes the visible notice from eligible HTML pages.")
+	}
+	if settings.Enabled && !settings.HTMLInjectionEnabled && settings.Mode == servedByModeVisibleAndHeaders {
+		warnings = append(warnings, "Disabling HTML injection removes the visible notice from eligible HTML pages.")
+	}
+	if !settings.ReportAbuseEnabled {
+		warnings = append(warnings, "Disabling report abuse removes public abuse intake links and endpoints.")
+	}
+	return warnings
+}
+
 type preparedProxiedResponse struct {
 	status   int
 	headers  http.Header
@@ -1726,6 +1962,15 @@ type servedByAffordance struct {
 }
 
 func prepareProxiedResponse(r *http.Request, resp TunnelResponse, affordance servedByAffordance) (preparedProxiedResponse, error) {
+	return prepareProxiedResponseWithSettings(r, resp, affordance, servedBySettings{
+		Enabled:              true,
+		Mode:                 servedByModeVisibleAndHeaders,
+		HTMLInjectionEnabled: true,
+		ReportAbuseEnabled:   true,
+	})
+}
+
+func prepareProxiedResponseWithSettings(r *http.Request, resp TunnelResponse, affordance servedByAffordance, settings servedBySettings) (preparedProxiedResponse, error) {
 	status := resp.StatusCode
 	if status == 0 {
 		status = http.StatusOK
@@ -1735,7 +1980,7 @@ func prepareProxiedResponse(r *http.Request, resp TunnelResponse, affordance ser
 		return preparedProxiedResponse{}, err
 	}
 
-	decision := classifyProxiedResponse(r, status, resp.Headers, payload)
+	decision := classifyProxiedResponse(r, status, resp.Headers, payload, settings)
 	headers := filteredProxiedResponseHeaders(resp.Headers)
 	body := payload
 	payloadChanged := false
@@ -1750,7 +1995,7 @@ func prepareProxiedResponse(r *http.Request, resp TunnelResponse, affordance ser
 	if payloadChanged {
 		removeStalePayloadHeaders(headers)
 	}
-	if decision != responseDecorationSkip {
+	if settings.Enabled && decision != responseDecorationSkip {
 		headers.Set(servedByHeaderName, servedByHeaderValue)
 	}
 	if responseCanHaveBody(r.Method, status) {
@@ -1767,11 +2012,17 @@ func prepareProxiedResponse(r *http.Request, resp TunnelResponse, affordance ser
 	}, nil
 }
 
-func classifyProxiedResponse(r *http.Request, status int, headers http.Header, payload []byte) responseDecorationDecision {
+func classifyProxiedResponse(r *http.Request, status int, headers http.Header, payload []byte, settings servedBySettings) responseDecorationDecision {
 	if isUpgradeRequest(r) || isUpgradeResponse(status, headers) {
 		return responseDecorationSkip
 	}
+	if !settings.Enabled {
+		return responseDecorationSkip
+	}
 	if !responseCanHaveBody(r.Method, status) {
+		return responseDecorationHeaderOnly
+	}
+	if settings.Mode == servedByModeHeadersOnly || !settings.HTMLInjectionEnabled {
 		return responseDecorationHeaderOnly
 	}
 	if r.Method != http.MethodGet {
@@ -1897,22 +2148,28 @@ func injectServedByMarkup(payload []byte, affordance servedByAffordance) []byte 
 func servedByMarkup(affordance servedByAffordance) string {
 	learnMoreURL := html.EscapeString(affordance.LearnMoreURL)
 	reportAbuseURL := html.EscapeString(affordance.ReportAbuseURL)
-	return `<aside data-portflare-served-by="true" role="complementary" aria-label="Portflare service notice" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;gap:8px;align-items:center;max-width:min(92vw,360px);padding:8px 10px;border:1px solid #9ca3af;background:#ffffff;color:#111827;font:13px/1.4 sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.16)">` +
+	markup := `<aside data-portflare-served-by="true" role="complementary" aria-label="Portflare service notice" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;gap:8px;align-items:center;max-width:min(92vw,360px);padding:8px 10px;border:1px solid #9ca3af;background:#ffffff;color:#111827;font:13px/1.4 sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.16)">` +
 		`<span>Served by Portflare</span>` +
-		`<a href="` + learnMoreURL + `" style="color:#1d4ed8;text-decoration:underline">Learn more</a>` +
-		`<a href="` + reportAbuseURL + `" style="color:#b91c1c;text-decoration:underline">Report abuse</a>` +
-		`</aside>`
+		`<a href="` + learnMoreURL + `" style="color:#1d4ed8;text-decoration:underline">Learn more</a>`
+	if reportAbuseURL != "" {
+		markup += `<a href="` + reportAbuseURL + `" style="color:#b91c1c;text-decoration:underline">Report abuse</a>`
+	}
+	return markup + `</aside>`
 }
 
-func (s *Server) addPortflareFallbackHeaders(headers http.Header, r *http.Request, appName, publicUserLabel string) {
-	if isUpgradeRequest(r) {
+func (s *Server) addPortflareFallbackHeaders(headers http.Header, r *http.Request, appName, publicUserLabel string, settings servedBySettings) {
+	if isUpgradeRequest(r) || !settings.Enabled {
 		return
 	}
-	affordance := s.servedByAffordance(r, appName, publicUserLabel)
+	affordance := s.servedByAffordance(r, appName, publicUserLabel, settings)
 
 	headers.Set(servedByHeaderName, servedByHeaderValue)
 	headers.Set(learnMoreHeaderName, affordance.LearnMoreURL)
-	headers.Set(reportAbuseHeaderName, affordance.ReportAbuseURL)
+	if affordance.ReportAbuseURL != "" {
+		headers.Set(reportAbuseHeaderName, affordance.ReportAbuseURL)
+	} else {
+		headers.Del(reportAbuseHeaderName)
+	}
 	if appName = slug(appName); appName != "" {
 		headers.Set(appHeaderName, appName)
 	}
@@ -1920,20 +2177,25 @@ func (s *Server) addPortflareFallbackHeaders(headers http.Header, r *http.Reques
 		headers.Set(userHeaderName, publicUserLabel)
 	}
 	headers.Add("Link", fmt.Sprintf("<%s>; rel=\"learn-more\"", affordance.LearnMoreURL))
-	headers.Add("Link", fmt.Sprintf("<%s>; rel=\"report-abuse\"", affordance.ReportAbuseURL))
+	if affordance.ReportAbuseURL != "" {
+		headers.Add("Link", fmt.Sprintf("<%s>; rel=\"report-abuse\"", affordance.ReportAbuseURL))
+	}
 }
 
-func (s *Server) servedByAffordance(r *http.Request, appName, publicUserLabel string) servedByAffordance {
+func (s *Server) servedByAffordance(r *http.Request, appName, publicUserLabel string, settings servedBySettings) servedByAffordance {
 	serviceBaseURL := s.publicServiceBaseURL(r)
 	query := neturl.Values{}
 	query.Set("url", publicRequestURL(r))
 	if contextValue := servedByRouteContext(appName, publicUserLabel); contextValue != "" {
 		query.Set("context", contextValue)
 	}
-	return servedByAffordance{
-		LearnMoreURL:   serviceBaseURL + learnMorePath,
-		ReportAbuseURL: serviceBaseURL + reportPath + "?" + query.Encode(),
+	affordance := servedByAffordance{
+		LearnMoreURL: serviceBaseURL + learnMorePath,
 	}
+	if settings.ReportAbuseEnabled {
+		affordance.ReportAbuseURL = serviceBaseURL + reportPath + "?" + query.Encode()
+	}
+	return affordance
 }
 
 func servedByRouteContext(appName, publicUserLabel string) string {
@@ -1977,6 +2239,7 @@ func isSafePublicUserLabel(label string) bool {
 func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, appName string) {
 	started := time.Now()
 
+	settings := s.currentServedBySettings()
 	s.stateMu.RLock()
 	app, ok := s.state.Apps[appKey(userName, appName)]
 	publicUserLabel := ""
@@ -1986,7 +2249,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 	s.stateMu.RUnlock()
 	if !ok || !app.Approved {
 		s.recordTraffic(userName, appName, http.StatusNotFound, 0, 0, time.Since(started), true)
-		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 		writeError(w, http.StatusNotFound, "app is not available")
 		return
 	}
@@ -1996,13 +2259,13 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 	s.clientsMu.RUnlock()
 	if client == nil {
 		s.recordTraffic(userName, appName, http.StatusBadGateway, 0, 0, time.Since(started), true)
-		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 		writeError(w, http.StatusBadGateway, "client is offline")
 		return
 	}
 	if _, ok := client.apps[appName]; !ok {
 		s.recordTraffic(userName, appName, http.StatusBadGateway, 0, 0, time.Since(started), true)
-		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 		writeError(w, http.StatusBadGateway, "app is not connected")
 		return
 	}
@@ -2010,7 +2273,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 	body, err := io.ReadAll(io.LimitReader(r.Body, s.cfg.MaxBodyBytes))
 	if err != nil {
 		s.recordTraffic(userName, appName, http.StatusBadRequest, 0, 0, time.Since(started), true)
-		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -2041,7 +2304,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 		delete(s.pending, requestID)
 		s.pendingMu.Unlock()
 		s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
-		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -2053,20 +2316,20 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 	case resp := <-pending.ch:
 		if resp.Error != "" {
 			s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
-			s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
+			s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 			writeError(w, http.StatusBadGateway, resp.Error)
 			return
 		}
-		affordance := s.servedByAffordance(r, appName, publicUserLabel)
-		prepared, err := prepareProxiedResponse(r, resp, affordance)
+		affordance := s.servedByAffordance(r, appName, publicUserLabel, settings)
+		prepared, err := prepareProxiedResponseWithSettings(r, resp, affordance, settings)
 		if err != nil {
 			s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
-			s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
+			s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 			writeError(w, http.StatusBadGateway, "invalid upstream response")
 			return
 		}
 		if prepared.decision != responseDecorationSkip {
-			s.addPortflareFallbackHeaders(prepared.headers, r, appName, publicUserLabel)
+			s.addPortflareFallbackHeaders(prepared.headers, r, appName, publicUserLabel, settings)
 		}
 		for k, values := range prepared.headers {
 			for _, v := range values {
@@ -2084,7 +2347,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 		delete(s.pending, requestID)
 		s.pendingMu.Unlock()
 		s.recordTraffic(userName, appName, http.StatusGatewayTimeout, bytesIn, 0, time.Since(started), true)
-		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel, settings)
 		writeError(w, http.StatusGatewayTimeout, "upstream request timed out")
 	}
 }
@@ -2554,6 +2817,18 @@ func wantsJSON(r *http.Request) bool {
 	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json")
 }
 
+func settingBoolFormValue(r *http.Request, current bool) (bool, error) {
+	raw := strings.TrimSpace(r.Form.Get("value"))
+	if raw == "" {
+		return !current, nil
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("value for %s must be true or false", strings.TrimSpace(r.Form.Get("setting")))
+	}
+	return parsed, nil
+}
+
 func isAdmin(userName, email string, admins map[string]struct{}) bool {
 	if _, ok := admins[userLabel(userName)]; ok {
 		return true
@@ -2648,8 +2923,12 @@ const dashboardTemplates = `
     <p>A <strong>Served by Portflare</strong> notice means the page reached you through Portflare routing infrastructure. Portflare does not create, review, or endorse the app content, and the app operator remains responsible for what the app serves.</p>
 
     <h2>Report abuse</h2>
+    {{if .ReportAbuseEnabled}}
     <p>If a public Portflare URL appears to host phishing, malware, scams, spam, unauthorized private content, or other abusive material, report the URL and include enough context for review.</p>
     <p><a class="cta" href="{{.ReportAbuseURL}}">Report abuse</a></p>
+    {{else}}
+    <p>Report abuse intake is disabled by this Portflare administrator.</p>
+    {{end}}
     <p class="muted">Do not include passwords, API keys, private tokens, or other secrets in an abuse report.</p>
   </body>
 </html>
@@ -2684,6 +2963,24 @@ const dashboardTemplates = `
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="allow_user_app_approval"><button type="submit">Toggle user self-approval</button></form>
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="auto_approve_for_users"><button type="submit">Toggle auto-approve for users</button></form>
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="auto_approve_for_admins"><button type="submit">Toggle auto-approve for admins</button></form>
+
+    <h2>Served-by and report abuse settings</h2>
+    {{if .ServedByWarnings}}
+    <ul>
+      {{range .ServedByWarnings}}<li><strong>Warning:</strong> {{.}}</li>{{end}}
+    </ul>
+    {{end}}
+    <ul>
+      <li>Served-by enabled: <strong id="served-by-enabled">{{.ServedByEnabled}}</strong></li>
+      <li>Served-by mode: <strong id="served-by-mode">{{.ServedByMode}}</strong></li>
+      <li>HTML injection enabled: <strong id="served-by-html-injection-enabled">{{.ServedByHTMLInjectionEnabled}}</strong></li>
+      <li>Report abuse enabled: <strong id="report-abuse-enabled">{{.ReportAbuseEnabled}}</strong></li>
+    </ul>
+    <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_enabled"><button type="submit">Toggle served-by</button></form>
+    <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_mode"><input type="hidden" name="value" value="visible_and_headers"><button type="submit">Use visible and headers mode</button></form>
+    <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_mode"><input type="hidden" name="value" value="headers_only"><button type="submit">Use headers-only mode</button></form>
+    <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_html_injection_enabled"><button type="submit">Toggle HTML injection</button></form>
+    <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="report_abuse_enabled"><button type="submit">Toggle report abuse</button></form>
 
     <h2>Users</h2>
     <table>
@@ -2726,6 +3023,10 @@ const dashboardTemplates = `
         const allowUserAppApproval = document.getElementById('allow-user-app-approval');
         const autoApproveForUsers = document.getElementById('auto-approve-for-users');
         const autoApproveForAdmins = document.getElementById('auto-approve-for-admins');
+        const servedByEnabled = document.getElementById('served-by-enabled');
+        const servedByMode = document.getElementById('served-by-mode');
+        const servedByHTMLInjectionEnabled = document.getElementById('served-by-html-injection-enabled');
+        const reportAbuseEnabled = document.getElementById('report-abuse-enabled');
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(proto + '//' + window.location.host + '/ws/ui');
         const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -2737,6 +3038,10 @@ const dashboardTemplates = `
           allowUserAppApproval.textContent = String(data.allow_user_app_approval);
           autoApproveForUsers.textContent = String(data.auto_approve_for_users);
           autoApproveForAdmins.textContent = String(data.auto_approve_for_admins);
+          servedByEnabled.textContent = String(data.served_by_enabled);
+          servedByMode.textContent = String(data.served_by_mode);
+          servedByHTMLInjectionEnabled.textContent = String(data.served_by_html_injection_enabled);
+          reportAbuseEnabled.textContent = String(data.report_abuse_enabled);
           usersBody.innerHTML = data.users.length ? data.users.map((u) => '<tr><td><a href="/me">' + esc(u.user_name) + '</a></td><td>' + esc(u.email) + '</td><td>' + esc(u.created_at) + '</td></tr>').join('') : '<tr><td colspan="3">No users yet.</td></tr>';
           appsBody.innerHTML = data.apps.length ? data.apps.map((a) => '<tr><td>' + esc(a.user_name) + '</td><td>' + esc(a.app_name) + '</td><td>' + esc(a.approved) + '</td><td>' + esc(a.connected) + '</td><td><code>' + esc(a.public_url) + '</code></td><td>' + (a.public_port || '-') + '</td><td>' + (a.approved ? 'approved' : 'pending') + '</td></tr>').join('') : '<tr><td colspan="7">No applications registered.</td></tr>';
           status.textContent = 'Live updates: synced';

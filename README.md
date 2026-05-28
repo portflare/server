@@ -27,7 +27,36 @@ export PORTFLARE_BASE_DOMAIN=reverse.example.test
 export PORTFLARE_STATE_PATH=./state.json
 export PORTFLARE_ADMIN_USERS=admin@example.com
 export PORTFLARE_TRAFFIC_STATS_INTERVAL=30s
+export PORTFLARE_SERVED_BY_ENABLED=true
+export PORTFLARE_SERVED_BY_MODE=visible_and_headers
+export PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED=true
+export PORTFLARE_REPORT_ABUSE_ENABLED=true
 portflare-server
+```
+
+## Served-by disclosure and abuse reports
+
+Public deployments default to visible served-by disclosure plus response headers:
+
+- `PORTFLARE_SERVED_BY_ENABLED=true`
+- `PORTFLARE_SERVED_BY_MODE=visible_and_headers`
+- `PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED=true`
+- `PORTFLARE_REPORT_ABUSE_ENABLED=true`
+
+The settings are copied into the state file on first run, displayed in `/admin` and `/api/admin/state`, and can be changed by an admin without restarting the server.
+
+Self-hosted deployments that do not want HTML mutation can use:
+
+```bash
+export PORTFLARE_SERVED_BY_MODE=headers_only
+export PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED=false
+```
+
+Private/self-hosted deployments can also disable all disclosure or abuse intake, but the admin UI warns because this removes public disclosure headers, visible notices, or report-abuse endpoints:
+
+```bash
+export PORTFLARE_SERVED_BY_ENABLED=false
+export PORTFLARE_REPORT_ABUSE_ENABLED=false
 ```
 
 ## Readiness
