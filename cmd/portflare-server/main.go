@@ -4284,6 +4284,8 @@ const dashboardTemplates = `
   <body>
     <h1>Report abuse</h1>
     <p>Portflare routes traffic for independently operated apps. Reports may be shared with the site operator as needed to investigate abuse.</p>
+    <p>If you arrived from a <strong>Served by Portflare</strong> notice, this form reports the public Portflare route shown in the reported URL. It does not mean Portflare has reviewed or endorsed the app.</p>
+    <p class="muted">On self-hosted Portflare instances, the self-hosted operator is responsible for monitoring and responding to reports submitted here unless a separate managed-service agreement says otherwise.</p>
     <p>Portflare stores only the report details needed to investigate abuse: the reported URL, category, description, optional reporter contact, route context, requester IP address, user agent, and timestamps.</p>
     <p class="muted">Routine report records should be retained only for the operator's abuse-response window, with IP and user-agent metadata truncated or deleted after 180 days unless a legal hold or safety obligation requires longer retention.</p>
     <p class="muted">Do not submit passwords, API keys, private tokens, or other secrets. If there is imminent danger, contact local emergency services.</p>
@@ -4333,6 +4335,7 @@ const dashboardTemplates = `
 
     <h2>What the served-by notice means</h2>
     <p>A <strong>Served by Portflare</strong> notice means the page reached you through Portflare routing infrastructure. Portflare does not create, review, or endorse the app content, and the app operator remains responsible for what the app serves.</p>
+    <p class="muted">On self-hosted Portflare instances, the self-hosted operator is responsible for monitoring and responding to reports. Portflare software does not provide staffed moderation by default.</p>
 
     <h2>Report abuse</h2>
     {{if .ReportAbuseEnabled}}
