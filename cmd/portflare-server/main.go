@@ -146,22 +146,32 @@ type AuditEvent struct {
 }
 
 type AbuseReport struct {
-	ID                string    `json:"id"`
-	ReportedURL       string    `json:"reported_url"`
-	ReportedHost      string    `json:"reported_host,omitempty"`
-	ReportedPath      string    `json:"reported_path,omitempty"`
-	ReportedUserName  string    `json:"reported_user_name,omitempty"`
-	ReportedUserLabel string    `json:"reported_user_label,omitempty"`
-	ReportedAppName   string    `json:"reported_app_name,omitempty"`
-	Category          string    `json:"category"`
-	Description       string    `json:"description"`
-	Context           string    `json:"context,omitempty"`
-	ReporterContact   string    `json:"reporter_contact,omitempty"`
-	ReporterIP        string    `json:"reporter_ip"`
-	ReporterUserAgent string    `json:"reporter_user_agent,omitempty"`
-	Status            string    `json:"status"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                string            `json:"id"`
+	ReportedURL       string            `json:"reported_url"`
+	ReportedHost      string            `json:"reported_host,omitempty"`
+	ReportedPath      string            `json:"reported_path,omitempty"`
+	ReportedUserName  string            `json:"reported_user_name,omitempty"`
+	ReportedUserLabel string            `json:"reported_user_label,omitempty"`
+	ReportedAppName   string            `json:"reported_app_name,omitempty"`
+	Category          string            `json:"category"`
+	Description       string            `json:"description"`
+	Context           string            `json:"context,omitempty"`
+	ReporterContact   string            `json:"reporter_contact,omitempty"`
+	ReporterIP        string            `json:"reporter_ip"`
+	ReporterUserAgent string            `json:"reporter_user_agent,omitempty"`
+	Status            string            `json:"status"`
+	StatusUpdatedBy   string            `json:"status_updated_by,omitempty"`
+	StatusUpdatedAt   time.Time         `json:"status_updated_at,omitempty"`
+	InternalNotes     []AbuseReportNote `json:"internal_notes,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+}
+
+type AbuseReportNote struct {
+	ID            string    `json:"id"`
+	Body          string    `json:"body"`
+	ActorUserName string    `json:"actor_user_name"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type authIdentity struct {
@@ -588,7 +598,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/register", s.handleRegister)
 	mux.HandleFunc("/connect", s.handleConnect)
 	mux.HandleFunc("/ws/ui", s.handleUIWebSocket)
+	mux.HandleFunc("/admin/abuse-reports/", s.handleAdminAbuseReportPage)
 	mux.HandleFunc("/admin", s.handleAdminPage)
+	mux.HandleFunc("/api/admin/abuse-reports/", s.handleAdminAbuseReport)
+	mux.HandleFunc("/api/admin/abuse-reports", s.handleAdminAbuseReports)
 	mux.HandleFunc("/api/admin/state", s.handleAdminState)
 	mux.HandleFunc("/api/admin/traffic", s.handleAdminTraffic)
 	mux.HandleFunc("/admin/toggle-registration", s.handleToggleRegistration)
@@ -844,6 +857,7 @@ func (s *Server) handleReportAbuseAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not save report")
 		return
 	}
+	s.notifyUISubscribers()
 
 	writeJSON(w, http.StatusCreated, map[string]string{"case_id": report.ID})
 }
@@ -1310,6 +1324,7 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 	s.stateMu.RLock()
 	users := make([]*User, 0, len(s.state.Users))
 	apps := make([]map[string]any, 0, len(s.state.Apps))
+	abuseReports := make([]map[string]any, 0, len(s.state.AbuseReports))
 	for _, u := range s.state.Users {
 		cp := *u
 		users = append(users, &cp)
@@ -1349,6 +1364,9 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 			"served_by_override_updated_by": cp.ServedByOverrideUpdatedBy,
 		})
 	}
+	for _, report := range s.state.AbuseReports {
+		abuseReports = append(abuseReports, s.abuseReportSummaryLocked(report))
+	}
 	s.stateMu.RUnlock()
 	if mode, ok := normalizeServedByMode(servedByMode); ok {
 		servedByMode = mode
@@ -1368,6 +1386,14 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 	sort.Slice(apps, func(i, j int) bool {
 		return fmt.Sprint(apps[i]["user_name"], "/", apps[i]["app_name"]) < fmt.Sprint(apps[j]["user_name"], "/", apps[j]["app_name"])
 	})
+	sort.Slice(abuseReports, func(i, j int) bool {
+		left, _ := abuseReports[i]["created_at"].(time.Time)
+		right, _ := abuseReports[j]["created_at"].(time.Time)
+		if left.Equal(right) {
+			return fmt.Sprint(abuseReports[i]["id"]) < fmt.Sprint(abuseReports[j]["id"])
+		}
+		return left.After(right)
+	})
 	return map[string]any{
 		"identity":                          map[string]any{"user_name": identity.UserName},
 		"registration_open":                 registrationOpen,
@@ -1382,8 +1408,11 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 		"served_by_emergency_force_visible": servedByEmergencyForceVisible,
 		"served_by_warnings":                servedByWarnings,
 		"served_by_app_override_options":    servedByAppOverrideOptions(),
+		"abuse_report_status_options":       abuseReportStatusOptions(),
+		"abuse_report_category_options":     abuseReportCategories(),
 		"users":                             users,
 		"apps":                              apps,
+		"abuse_reports":                     abuseReports,
 		"base_domain":                       s.cfg.PublicBaseDomain,
 	}
 }
@@ -1413,8 +1442,11 @@ func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 		"ServedByEmergencyForceVisible": data["served_by_emergency_force_visible"],
 		"ServedByWarnings":              data["served_by_warnings"],
 		"ServedByAppOverrideOptions":    data["served_by_app_override_options"],
+		"AbuseReportStatusOptions":      data["abuse_report_status_options"],
+		"AbuseReportCategoryOptions":    data["abuse_report_category_options"],
 		"Users":                         data["users"],
 		"Apps":                          data["apps"],
+		"AbuseReports":                  data["abuse_reports"],
 		"BaseDomain":                    data["base_domain"],
 	})
 }
@@ -1493,6 +1525,518 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.adminViewData(identity))
+}
+
+type abuseReportFilters struct {
+	Status      string `json:"status,omitempty"`
+	Category    string `json:"category,omitempty"`
+	UserQuery   string `json:"user,omitempty"`
+	AppName     string `json:"app,omitempty"`
+	ReportedURL string `json:"reported_url,omitempty"`
+}
+
+type abuseReportStatusUpdateInput struct {
+	Status string `json:"status"`
+	Note   string `json:"note"`
+}
+
+type abuseReportNoteInput struct {
+	Body string `json:"body"`
+}
+
+func (s *Server) requireAdminIdentity(w http.ResponseWriter, r *http.Request) (authIdentity, bool) {
+	identity, ok := s.requireIdentity(w, r)
+	if !ok {
+		return authIdentity{}, false
+	}
+	if !identity.IsAdmin {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return authIdentity{}, false
+	}
+	return identity, true
+}
+
+func (s *Server) handleAdminAbuseReports(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/api/admin/abuse-reports" {
+		http.NotFound(w, r)
+		return
+	}
+	_, ok := s.requireAdminIdentity(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	filters, err := parseAbuseReportFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"reports":          s.filteredAbuseReportSummaries(filters),
+		"filters":          filters,
+		"status_options":   abuseReportStatusOptions(),
+		"category_options": abuseReportCategories(),
+	})
+}
+
+func (s *Server) handleAdminAbuseReport(w http.ResponseWriter, r *http.Request) {
+	identity, ok := s.requireAdminIdentity(w, r)
+	if !ok {
+		return
+	}
+	tail := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/abuse-reports/"), "/")
+	if tail == "" {
+		http.NotFound(w, r)
+		return
+	}
+	parts := strings.Split(tail, "/")
+	reportID := parts[0]
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		detail, found := s.adminAbuseReportDetail(reportID)
+		if !found {
+			writeError(w, http.StatusNotFound, "report not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	if len(parts) != 2 || r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	switch parts[1] {
+	case "status":
+		s.handleAdminAbuseReportStatus(w, r, identity, reportID)
+	case "notes":
+		s.handleAdminAbuseReportNote(w, r, identity, reportID)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) handleAdminAbuseReportPage(w http.ResponseWriter, r *http.Request) {
+	_, ok := s.requireAdminIdentity(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	reportID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/abuse-reports/"), "/")
+	if reportID == "" || strings.Contains(reportID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	detail, found := s.adminAbuseReportDetail(reportID)
+	if !found {
+		writeError(w, http.StatusNotFound, "report not found")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "admin_abuse_report", map[string]any{
+		"Report":         detail["report"],
+		"ReportedUser":   detail["reported_user"],
+		"CurrentApp":     detail["current_app"],
+		"RelatedReports": detail["related_reports"],
+		"ActionLinks":    detail["action_links"],
+		"StatusOptions":  abuseReportStatusOptions(),
+	})
+}
+
+func (s *Server) handleAdminAbuseReportStatus(w http.ResponseWriter, r *http.Request, identity authIdentity, reportID string) {
+	input, err := parseAbuseReportStatusUpdateInput(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	status, ok := normalizeAbuseReportStatus(input.Status)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "status is invalid")
+		return
+	}
+	note := strings.TrimSpace(input.Note)
+	if len(note) > maxAbuseReportNoteLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("note must be at most %d bytes", maxAbuseReportNoteLen))
+		return
+	}
+
+	s.stateMu.Lock()
+	report, found := s.state.AbuseReports[reportID]
+	if !found {
+		s.stateMu.Unlock()
+		writeError(w, http.StatusNotFound, "report not found")
+		return
+	}
+	now := time.Now().UTC()
+	report.Status = status
+	report.StatusUpdatedBy = identity.UserName
+	report.StatusUpdatedAt = now
+	report.UpdatedAt = now
+	if note != "" {
+		report.InternalNotes = append(report.InternalNotes, AbuseReportNote{
+			ID:            "abn_" + randomToken(8),
+			Body:          note,
+			ActorUserName: identity.UserName,
+			CreatedAt:     now,
+		})
+	}
+	err = s.saveStateLocked()
+	s.stateMu.Unlock()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not save report")
+		return
+	}
+	s.notifyUISubscribers()
+	if wantsJSON(r) {
+		detail, _ := s.adminAbuseReportDetail(reportID)
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	http.Redirect(w, r, "/admin/abuse-reports/"+neturl.PathEscape(reportID), http.StatusSeeOther)
+}
+
+func (s *Server) handleAdminAbuseReportNote(w http.ResponseWriter, r *http.Request, identity authIdentity, reportID string) {
+	input, err := parseAbuseReportNoteInput(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	body := strings.TrimSpace(input.Body)
+	if body == "" {
+		writeError(w, http.StatusBadRequest, "note body is required")
+		return
+	}
+	if len(body) > maxAbuseReportNoteLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("note must be at most %d bytes", maxAbuseReportNoteLen))
+		return
+	}
+
+	s.stateMu.Lock()
+	report, found := s.state.AbuseReports[reportID]
+	if !found {
+		s.stateMu.Unlock()
+		writeError(w, http.StatusNotFound, "report not found")
+		return
+	}
+	now := time.Now().UTC()
+	report.InternalNotes = append(report.InternalNotes, AbuseReportNote{
+		ID:            "abn_" + randomToken(8),
+		Body:          body,
+		ActorUserName: identity.UserName,
+		CreatedAt:     now,
+	})
+	report.UpdatedAt = now
+	err = s.saveStateLocked()
+	s.stateMu.Unlock()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not save report")
+		return
+	}
+	s.notifyUISubscribers()
+	if wantsJSON(r) {
+		detail, _ := s.adminAbuseReportDetail(reportID)
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	http.Redirect(w, r, "/admin/abuse-reports/"+neturl.PathEscape(reportID), http.StatusSeeOther)
+}
+
+func parseAbuseReportFilters(r *http.Request) (abuseReportFilters, error) {
+	q := r.URL.Query()
+	filters := abuseReportFilters{
+		Category:    strings.TrimSpace(q.Get("category")),
+		UserQuery:   strings.TrimSpace(q.Get("user")),
+		AppName:     slug(q.Get("app")),
+		ReportedURL: strings.ToLower(strings.TrimSpace(q.Get("reported_url"))),
+	}
+	if raw := strings.TrimSpace(q.Get("status")); raw != "" {
+		status, ok := normalizeAbuseReportStatus(raw)
+		if !ok {
+			return filters, errors.New("status is invalid")
+		}
+		filters.Status = status
+	}
+	if filters.Category != "" && !isAllowedAbuseReportCategory(filters.Category) {
+		return filters, errors.New("category is invalid")
+	}
+	return filters, nil
+}
+
+func parseAbuseReportStatusUpdateInput(r *http.Request) (abuseReportStatusUpdateInput, error) {
+	var input abuseReportStatusUpdateInput
+	if strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			return input, errors.New("invalid status update request")
+		}
+		return input, nil
+	}
+	if err := r.ParseForm(); err != nil {
+		return input, errors.New("invalid status update request")
+	}
+	input.Status = r.Form.Get("status")
+	input.Note = r.Form.Get("note")
+	return input, nil
+}
+
+func parseAbuseReportNoteInput(r *http.Request) (abuseReportNoteInput, error) {
+	var input abuseReportNoteInput
+	if strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			return input, errors.New("invalid note request")
+		}
+		return input, nil
+	}
+	if err := r.ParseForm(); err != nil {
+		return input, errors.New("invalid note request")
+	}
+	input.Body = r.Form.Get("body")
+	if input.Body == "" {
+		input.Body = r.Form.Get("note")
+	}
+	return input, nil
+}
+
+func (s *Server) filteredAbuseReportSummaries(filters abuseReportFilters) []map[string]any {
+	s.stateMu.RLock()
+	reports := make([]*AbuseReport, 0, len(s.state.AbuseReports))
+	for _, report := range s.state.AbuseReports {
+		if !abuseReportMatchesFilters(report, filters) {
+			continue
+		}
+		reports = append(reports, report)
+	}
+	sort.Slice(reports, func(i, j int) bool {
+		if reports[i].CreatedAt.Equal(reports[j].CreatedAt) {
+			return reports[i].ID < reports[j].ID
+		}
+		return reports[i].CreatedAt.After(reports[j].CreatedAt)
+	})
+	out := make([]map[string]any, 0, len(reports))
+	for _, report := range reports {
+		out = append(out, s.abuseReportSummaryLocked(report))
+	}
+	s.stateMu.RUnlock()
+	return out
+}
+
+func abuseReportMatchesFilters(report *AbuseReport, filters abuseReportFilters) bool {
+	if report == nil {
+		return false
+	}
+	if filters.Status != "" && abuseReportStatusOrDefault(report.Status) != filters.Status {
+		return false
+	}
+	if filters.Category != "" && report.Category != filters.Category {
+		return false
+	}
+	if filters.UserQuery != "" {
+		userQuery := slug(filters.UserQuery)
+		labelQuery := userLabel(filters.UserQuery)
+		if report.ReportedUserName != userQuery && report.ReportedUserLabel != labelQuery {
+			return false
+		}
+	}
+	if filters.AppName != "" && report.ReportedAppName != filters.AppName {
+		return false
+	}
+	if filters.ReportedURL != "" && !strings.Contains(strings.ToLower(report.ReportedURL), filters.ReportedURL) {
+		return false
+	}
+	return true
+}
+
+func (s *Server) adminAbuseReportDetail(reportID string) (map[string]any, bool) {
+	s.stateMu.RLock()
+	report, found := s.state.AbuseReports[reportID]
+	if !found {
+		s.stateMu.RUnlock()
+		return nil, false
+	}
+	reportCopy := *report
+	reportCopy.Status = abuseReportStatusOrDefault(reportCopy.Status)
+	reportCopy.InternalNotes = append([]AbuseReportNote(nil), report.InternalNotes...)
+
+	var reportedUser map[string]any
+	if user := s.state.Users[report.ReportedUserName]; user != nil {
+		reportedUser = map[string]any{
+			"user_name":         user.UserName,
+			"public_user_label": user.PublicUserLabel,
+			"email":             user.Email,
+			"created_at":        user.CreatedAt,
+			"updated_at":        user.UpdatedAt,
+		}
+	}
+
+	var currentApp map[string]any
+	var app *App
+	if report.ReportedUserName != "" && report.ReportedAppName != "" {
+		app = s.state.Apps[appKey(report.ReportedUserName, report.ReportedAppName)]
+		if app != nil {
+			currentApp = s.currentAppReportContextLocked(app)
+		}
+	}
+
+	related := make([]map[string]any, 0)
+	for _, candidate := range s.state.AbuseReports {
+		if isPriorRelatedAbuseReport(report, candidate) {
+			related = append(related, s.abuseReportSummaryLocked(candidate))
+		}
+	}
+	sort.Slice(related, func(i, j int) bool {
+		left, _ := related[i]["created_at"].(time.Time)
+		right, _ := related[j]["created_at"].(time.Time)
+		if left.Equal(right) {
+			return fmt.Sprint(related[i]["id"]) < fmt.Sprint(related[j]["id"])
+		}
+		return left.After(right)
+	})
+
+	actionLinks := s.abuseReportActionLinksLocked(&reportCopy, app)
+	s.stateMu.RUnlock()
+
+	return map[string]any{
+		"report":          &reportCopy,
+		"reported_user":   reportedUser,
+		"current_app":     currentApp,
+		"related_reports": related,
+		"action_links":    actionLinks,
+		"status_options":  abuseReportStatusOptions(),
+	}, true
+}
+
+func (s *Server) abuseReportSummaryLocked(report *AbuseReport) map[string]any {
+	summary := map[string]any{
+		"id":                  report.ID,
+		"reported_url":        report.ReportedURL,
+		"reported_host":       report.ReportedHost,
+		"reported_path":       report.ReportedPath,
+		"reported_user_name":  report.ReportedUserName,
+		"reported_user_label": report.ReportedUserLabel,
+		"reported_app_name":   report.ReportedAppName,
+		"category":            report.Category,
+		"status":              abuseReportStatusOrDefault(report.Status),
+		"created_at":          report.CreatedAt,
+		"updated_at":          report.UpdatedAt,
+	}
+	if app := s.state.Apps[appKey(report.ReportedUserName, report.ReportedAppName)]; app != nil {
+		summary["current_app_status"] = appReportStatus(app)
+	}
+	return summary
+}
+
+func (s *Server) currentAppReportContextLocked(app *App) map[string]any {
+	publicLabel := app.UserName
+	if user := s.state.Users[app.UserName]; user != nil && user.PublicUserLabel != "" {
+		publicLabel = user.PublicUserLabel
+	}
+	return map[string]any{
+		"user_name":   app.UserName,
+		"app_name":    app.AppName,
+		"approved":    app.Approved,
+		"connected":   app.Connected,
+		"public_port": app.PublicPort,
+		"public_url":  fmt.Sprintf("https://%s-%s.%s", app.AppName, publicLabel, s.cfg.PublicBaseDomain),
+		"status":      appReportStatus(app),
+		"created_at":  app.CreatedAt,
+		"updated_at":  app.UpdatedAt,
+	}
+}
+
+func (s *Server) abuseReportActionLinksLocked(report *AbuseReport, app *App) map[string]any {
+	links := map[string]any{
+		"admin_queue": "/admin#abuse-reports",
+		"detail_html": "/admin/abuse-reports/" + neturl.PathEscape(report.ID),
+	}
+	if report.ReportedUserName != "" {
+		links["user_filter"] = "/api/admin/abuse-reports?user=" + neturl.QueryEscape(report.ReportedUserName)
+		if user := s.state.Users[report.ReportedUserName]; user != nil && user.PublicUserLabel != "" {
+			links["user_public_url"] = fmt.Sprintf("https://%s.%s", user.PublicUserLabel, s.cfg.PublicBaseDomain)
+		}
+	}
+	if report.ReportedAppName != "" {
+		links["app_filter"] = "/api/admin/abuse-reports?user=" + neturl.QueryEscape(report.ReportedUserName) + "&app=" + neturl.QueryEscape(report.ReportedAppName)
+	}
+	if app != nil {
+		links["approve_app"] = "/api/admin/approve"
+		if currentApp := s.currentAppReportContextLocked(app); currentApp["public_url"] != "" {
+			links["app_public_url"] = currentApp["public_url"]
+		}
+	}
+	return links
+}
+
+func isPriorRelatedAbuseReport(current, candidate *AbuseReport) bool {
+	if current == nil || candidate == nil || current.ID == candidate.ID {
+		return false
+	}
+	if !current.CreatedAt.IsZero() && !candidate.CreatedAt.Before(current.CreatedAt) {
+		return false
+	}
+	if current.ReportedUserName != "" && current.ReportedAppName != "" {
+		return candidate.ReportedUserName == current.ReportedUserName && candidate.ReportedAppName == current.ReportedAppName
+	}
+	return current.ReportedURL != "" && candidate.ReportedURL == current.ReportedURL
+}
+
+func appReportStatus(app *App) string {
+	if app == nil {
+		return "unknown"
+	}
+	if app.Approved {
+		return "approved"
+	}
+	return "pending"
+}
+
+func abuseReportStatusOptions() []map[string]string {
+	return []map[string]string{
+		{"Value": abuseReportStatusNew, "Label": "New"},
+		{"Value": abuseReportStatusTriagedReviewing, "Label": "Triaged / reviewing"},
+		{"Value": abuseReportStatusNeedsMoreInfo, "Label": "Needs more info"},
+		{"Value": abuseReportStatusActionedMitigated, "Label": "Actioned / mitigated"},
+		{"Value": abuseReportStatusRejected, "Label": "Rejected"},
+		{"Value": abuseReportStatusDuplicate, "Label": "Duplicate"},
+		{"Value": abuseReportStatusEscalatedLegal, "Label": "Escalated / legal"},
+		{"Value": abuseReportStatusClosed, "Label": "Closed"},
+	}
+}
+
+func abuseReportStatusOrDefault(raw string) string {
+	if status, ok := normalizeAbuseReportStatus(raw); ok {
+		return status
+	}
+	return abuseReportStatusNew
+}
+
+func normalizeAbuseReportStatus(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case abuseReportStatusNew:
+		return abuseReportStatusNew, true
+	case "triaged", "reviewing", "triaged/reviewing", abuseReportStatusTriagedReviewing:
+		return abuseReportStatusTriagedReviewing, true
+	case abuseReportStatusNeedsMoreInfo:
+		return abuseReportStatusNeedsMoreInfo, true
+	case "actioned", "mitigated", "actioned/mitigated", abuseReportStatusActionedMitigated:
+		return abuseReportStatusActionedMitigated, true
+	case abuseReportStatusRejected:
+		return abuseReportStatusRejected, true
+	case abuseReportStatusDuplicate:
+		return abuseReportStatusDuplicate, true
+	case "escalated", "legal", "escalated/legal", abuseReportStatusEscalatedLegal:
+		return abuseReportStatusEscalatedLegal, true
+	case abuseReportStatusClosed:
+		return abuseReportStatusClosed, true
+	default:
+		return "", false
+	}
 }
 
 func (s *Server) handleToggleSetting(w http.ResponseWriter, r *http.Request) {
@@ -2075,10 +2619,18 @@ const (
 	maxAbuseReportDescriptionLen = 4000
 	maxAbuseReportContactLen     = 320
 	maxAbuseReportContextLen     = 1000
+	maxAbuseReportNoteLen        = 2000
 	abuseReportLimitPerWindow    = 5
 	abuseReportThrottleWindow    = 10 * time.Minute
 
-	abuseReportStatusNew = "new"
+	abuseReportStatusNew               = "new"
+	abuseReportStatusTriagedReviewing  = "triaged_reviewing"
+	abuseReportStatusNeedsMoreInfo     = "needs_more_info"
+	abuseReportStatusActionedMitigated = "actioned_mitigated"
+	abuseReportStatusRejected          = "rejected"
+	abuseReportStatusDuplicate         = "duplicate"
+	abuseReportStatusEscalatedLegal    = "escalated_legal"
+	abuseReportStatusClosed            = "closed"
 )
 
 func (d responseDecorationDecision) String() string {
@@ -3257,6 +3809,78 @@ const dashboardTemplates = `
 </html>
 {{end}}
 
+{{define "admin_abuse_report"}}
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Abuse report {{.Report.ID}}</title>
+    <style>
+      body { font-family: sans-serif; max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+      table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+      th, td { border: 1px solid #ddd; padding: .5rem; text-align: left; vertical-align: top; }
+      code { background: #f5f5f5; padding: .15rem .3rem; }
+      textarea { box-sizing: border-box; min-height: 7rem; width: 100%; }
+      .muted { color: #666; }
+    </style>
+  </head>
+  <body>
+    <p><a href="/admin#abuse-reports">Back to admin queue</a></p>
+    <h1>Abuse report {{.Report.ID}}</h1>
+    <p>Status: <strong>{{.Report.Status}}</strong></p>
+    <p>Reported URL: <code>{{.Report.ReportedURL}}</code></p>
+    <p>Category: {{.Report.Category}}</p>
+    <p>Description: {{.Report.Description}}</p>
+
+    <h2>Reporter metadata</h2>
+    <table>
+      <tr><th>Contact</th><td>{{.Report.ReporterContact}}</td></tr>
+      <tr><th>IP</th><td>{{.Report.ReporterIP}}</td></tr>
+      <tr><th>User agent</th><td>{{.Report.ReporterUserAgent}}</td></tr>
+      <tr><th>Context</th><td>{{.Report.Context}}</td></tr>
+    </table>
+
+    <h2>Resolved target</h2>
+    <table>
+      <tr><th>User</th><td>{{with .ReportedUser}}{{index . "user_name"}} ({{index . "public_user_label"}}) {{index . "email"}}{{else}}Unknown{{end}}</td></tr>
+      <tr><th>App</th><td>{{with .CurrentApp}}{{index . "app_name"}}: <strong>{{index . "status"}}</strong>, connected={{index . "connected"}}{{else}}Unknown{{end}}</td></tr>
+      <tr><th>Public URL</th><td>{{with .ActionLinks}}{{with index . "app_public_url"}}<a href="{{.}}">{{.}}</a>{{else}}-{{end}}{{end}}</td></tr>
+      <tr><th>Actions</th><td>{{with .ActionLinks}}{{with index . "approve_app"}}<code>{{.}}</code>{{else}}-{{end}}{{end}}</td></tr>
+    </table>
+
+    <h2>Update status</h2>
+    <form method="post" action="/api/admin/abuse-reports/{{.Report.ID}}/status">
+      <select name="status">
+        {{range .StatusOptions}}<option value="{{index . "Value"}}" {{if eq $.Report.Status (index . "Value")}}selected{{end}}>{{index . "Label"}}</option>{{end}}
+      </select>
+      <textarea name="note" placeholder="Optional internal note"></textarea>
+      <button type="submit">Update status</button>
+    </form>
+
+    <h2>Internal notes</h2>
+    {{range .Report.InternalNotes}}
+    <p><strong>{{.ActorUserName}}</strong> <span class="muted">{{.CreatedAt}}</span><br>{{.Body}}</p>
+    {{else}}
+    <p class="muted">No internal notes yet.</p>
+    {{end}}
+    <form method="post" action="/api/admin/abuse-reports/{{.Report.ID}}/notes">
+      <textarea name="body" required></textarea>
+      <button type="submit">Add note</button>
+    </form>
+
+    <h2>Prior related reports</h2>
+    <table>
+      <tr><th>Case</th><th>Status</th><th>Category</th><th>Reported URL</th><th>Created</th></tr>
+      {{range .RelatedReports}}
+      <tr><td><a href="/admin/abuse-reports/{{index . "id"}}">{{index . "id"}}</a></td><td>{{index . "status"}}</td><td>{{index . "category"}}</td><td><code>{{index . "reported_url"}}</code></td><td>{{index . "created_at"}}</td></tr>
+      {{else}}
+      <tr><td colspan="5">No prior related reports.</td></tr>
+      {{end}}
+    </table>
+  </body>
+</html>
+{{end}}
+
 {{define "admin"}}
 <!doctype html>
 <html>
@@ -3309,6 +3933,40 @@ const dashboardTemplates = `
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_app_disable_allowed"><button type="submit">Toggle per-app disable allowance</button></form>
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_emergency_force_visible"><button type="submit">Toggle emergency force visible</button></form>
 
+    <h2 id="abuse-reports">Abuse reports</h2>
+    <form method="get" action="/api/admin/abuse-reports">
+      <select name="status">
+        <option value="">Any status</option>
+        {{range .AbuseReportStatusOptions}}<option value="{{index . "Value"}}">{{index . "Label"}}</option>{{end}}
+      </select>
+      <select name="category">
+        <option value="">Any category</option>
+        {{range .AbuseReportCategoryOptions}}<option value="{{index . "Value"}}">{{index . "Label"}}</option>{{end}}
+      </select>
+      <input type="text" name="user" placeholder="User">
+      <input type="text" name="app" placeholder="App">
+      <input type="text" name="reported_url" placeholder="Reported URL">
+      <button type="submit">Filter reports</button>
+    </form>
+    <table>
+      <tr><th>Case</th><th>Status</th><th>Category</th><th>Reported URL</th><th>User</th><th>App</th><th>Created</th></tr>
+      <tbody id="abuse-reports-body">
+      {{range .AbuseReports}}
+      <tr>
+        <td><a href="/admin/abuse-reports/{{index . "id"}}">{{index . "id"}}</a></td>
+        <td>{{index . "status"}}</td>
+        <td>{{index . "category"}}</td>
+        <td><code>{{index . "reported_url"}}</code></td>
+        <td>{{index . "reported_user_name"}}</td>
+        <td>{{index . "reported_app_name"}}</td>
+        <td>{{index . "created_at"}}</td>
+      </tr>
+      {{else}}
+      <tr><td colspan="7">No abuse reports submitted.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+
     <h2>Users</h2>
     <table>
       <tr><th>User</th><th>Email</th><th>Created</th></tr>
@@ -3356,6 +4014,7 @@ const dashboardTemplates = `
     <script>
       (() => {
         const status = document.getElementById('live-status');
+        const abuseReportsBody = document.getElementById('abuse-reports-body');
         const usersBody = document.getElementById('users-body');
         const appsBody = document.getElementById('apps-body');
         const registrationOpen = document.getElementById('registration-open');
@@ -3390,6 +4049,7 @@ const dashboardTemplates = `
           reportAbuseEnabled.textContent = String(data.report_abuse_enabled);
           servedByAppDisableAllowed.textContent = String(data.served_by_app_disable_allowed);
           servedByEmergencyForceVisible.textContent = String(data.served_by_emergency_force_visible);
+          abuseReportsBody.innerHTML = data.abuse_reports.length ? data.abuse_reports.map((r) => '<tr><td><a href="/admin/abuse-reports/' + esc(r.id) + '">' + esc(r.id) + '</a></td><td>' + esc(r.status) + '</td><td>' + esc(r.category) + '</td><td><code>' + esc(r.reported_url) + '</code></td><td>' + esc(r.reported_user_name || '') + '</td><td>' + esc(r.reported_app_name || '') + '</td><td>' + esc(r.created_at) + '</td></tr>').join('') : '<tr><td colspan="7">No abuse reports submitted.</td></tr>';
           usersBody.innerHTML = data.users.length ? data.users.map((u) => '<tr><td><a href="/me">' + esc(u.user_name) + '</a></td><td>' + esc(u.email) + '</td><td>' + esc(u.created_at) + '</td></tr>').join('') : '<tr><td colspan="3">No users yet.</td></tr>';
           appsBody.innerHTML = data.apps.length ? data.apps.map((a) => '<tr><td>' + esc(a.user_name) + '</td><td>' + esc(a.app_name) + '</td><td>' + esc(a.approved) + '</td><td>' + esc(a.connected) + '</td><td><code>' + esc(a.public_url) + '</code></td><td>' + (a.public_port || '-') + '</td><td>' + (a.approved ? 'approved' : 'pending') + '</td><td><strong>' + esc(a.effective_served_by_policy) + '</strong><br><span class="muted">override: ' + esc(a.served_by_override) + '</span>' + (a.served_by_override_reason ? '<br><span class="muted">reason: ' + esc(a.served_by_override_reason) + '</span>' : '') + '</td><td>' + overrideForm(a, data.served_by_app_override_options) + '</td></tr>').join('') : '<tr><td colspan="9">No applications registered.</td></tr>';
           status.textContent = 'Live updates: synced';
