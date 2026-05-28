@@ -407,6 +407,16 @@ func TestUserStateDisplaysServedByPolicyWithoutAllowingWeakening(t *testing.T) {
 	if app["served_by_override"] != servedByAppOverrideHeadersOnly || app["effective_served_by_policy"] != servedByModeHeadersOnly {
 		t.Fatalf("user state omitted served-by policy: %#v", app)
 	}
+	reportURL, _ := app["report_abuse_url"].(string)
+	for _, want := range []string{
+		"https://reverse.example.test/report-abuse?",
+		"url=https%3A%2F%2Fweb-alicesmith.reverse.example.test",
+		"context=served-by+banner%3B+app%3Dweb%3B+public_user%3Dalicesmith",
+	} {
+		if !strings.Contains(reportURL, want) {
+			t.Fatalf("user state omitted report-abuse URL part %q from %q in %#v", want, reportURL, app)
+		}
+	}
 	if _, ok := app["served_by_override_reason"]; ok {
 		t.Fatalf("user state should not expose admin override reason: %#v", app)
 	}
@@ -428,6 +438,42 @@ func TestUserStateDisplaysServedByPolicyWithoutAllowingWeakening(t *testing.T) {
 	}
 	if got := srv.state.Apps["alice/web"].ServedByOverride; got != servedByAppOverrideHeadersOnly {
 		t.Fatalf("non-admin request changed override to %q", got)
+	}
+}
+
+func TestUserPageShowsServedByPolicyAndReportLinkAsInformational(t *testing.T) {
+	srv := newServedByAdminTestServer(t)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("X-Auth-Request-User", "alice")
+	req.Header.Set("X-Auth-Request-Email", "alice@example.test")
+	srv.routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected user page status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"Served-by policy",
+		"Report abuse",
+		`href="https://reverse.example.test/report-abuse?`,
+		"url=https%3A%2F%2Fweb-alicesmith.reverse.example.test",
+		"served-by&#43;banner",
+		"app%3Dweb",
+		"public_user%3Dalicesmith",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected user page to contain %q, got %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`name="override"`,
+		"/api/admin/app-served-by-override",
+		"Toggle served-by",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("owner-facing page exposed served-by control %q in %s", forbidden, body)
+		}
 	}
 }
 

@@ -35,6 +35,14 @@ func TestServedByOperatorGuideCoversConfigurationAndCompatibility(t *testing.T) 
 		"streaming",
 		"single-page apps",
 		"binary responses",
+		"Owner preview",
+		"curl -i",
+		"headers-only fallback",
+		"Compressed responses",
+		"downloads",
+		"layout issues",
+		"Opt-out request",
+		"informational",
 	})
 }
 

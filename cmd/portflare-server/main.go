@@ -2599,12 +2599,14 @@ func (s *Server) userViewData(identity authIdentity, userName string) (map[strin
 			override = servedByAppOverrideInherit
 		}
 		effective := effectiveServedBySettings(globalSettings, override)
+		publicURL := fmt.Sprintf("https://%s-%s.%s", cp.AppName, user.PublicUserLabel, s.cfg.PublicBaseDomain)
 		apps = append(apps, map[string]any{
 			"app_name":                   cp.AppName,
 			"approved":                   cp.Approved,
 			"connected":                  cp.Connected,
 			"public_port":                cp.PublicPort,
-			"public_url":                 fmt.Sprintf("https://%s-%s.%s", cp.AppName, user.PublicUserLabel, s.cfg.PublicBaseDomain),
+			"public_url":                 publicURL,
+			"report_abuse_url":           s.reportAbuseURL(publicURL, cp.AppName, user.PublicUserLabel, effective),
 			"served_by_override":         override,
 			"effective_served_by_policy": servedByPolicyName(effective),
 			"status": func() string {
@@ -3470,18 +3472,29 @@ func (s *Server) addPortflareFallbackHeaders(headers http.Header, r *http.Reques
 
 func (s *Server) servedByAffordance(r *http.Request, appName, publicUserLabel string, settings servedBySettings) servedByAffordance {
 	serviceBaseURL := s.publicServiceBaseURL(r)
-	query := neturl.Values{}
-	query.Set("url", publicRequestURL(r))
-	if contextValue := servedByRouteContext(appName, publicUserLabel); contextValue != "" {
-		query.Set("context", contextValue)
-	}
 	affordance := servedByAffordance{
 		LearnMoreURL: serviceBaseURL + learnMorePath,
 	}
 	if settings.ReportAbuseEnabled {
-		affordance.ReportAbuseURL = serviceBaseURL + reportPath + "?" + query.Encode()
+		affordance.ReportAbuseURL = reportAbuseURL(serviceBaseURL, publicRequestURL(r), appName, publicUserLabel)
 	}
 	return affordance
+}
+
+func (s *Server) reportAbuseURL(reportedURL, appName, publicUserLabel string, settings servedBySettings) string {
+	if !settings.ReportAbuseEnabled {
+		return ""
+	}
+	return reportAbuseURL("https://"+canonicalHost(s.cfg.PublicBaseDomain), reportedURL, appName, publicUserLabel)
+}
+
+func reportAbuseURL(serviceBaseURL, reportedURL, appName, publicUserLabel string) string {
+	query := neturl.Values{}
+	query.Set("url", reportedURL)
+	if contextValue := servedByRouteContext(appName, publicUserLabel); contextValue != "" {
+		query.Set("context", contextValue)
+	}
+	return serviceBaseURL + reportPath + "?" + query.Encode()
 }
 
 func servedByRouteContext(appName, publicUserLabel string) string {
@@ -4645,7 +4658,7 @@ const dashboardTemplates = `
 
     <h2>Applications</h2>
     <table>
-      <tr><th>App</th><th>Approved</th><th>Connected</th><th>Subdomain</th><th>Port</th><th>Status</th><th>Served-by policy</th><th>Action</th></tr>
+      <tr><th>App</th><th>Approved</th><th>Connected</th><th>Subdomain</th><th>Port</th><th>Status</th><th>Served-by policy</th><th>Report abuse</th><th>Action</th></tr>
       <tbody id="user-apps-body">
       {{range .Apps}}
       <tr>
@@ -4656,10 +4669,11 @@ const dashboardTemplates = `
         <td>{{with index . "public_port"}}{{.}}{{else}}-{{end}}</td>
         <td>{{index . "status"}}</td>
         <td>{{index . "effective_served_by_policy"}} <span style="color:#666">(override: {{index . "served_by_override"}})</span></td>
+        <td>{{with index . "report_abuse_url"}}<a href="{{.}}">Report abuse</a>{{else}}Disabled{{end}}</td>
         <td>{{if index . "can_approve"}}<form method="post" action="/api/me/approve"><input type="hidden" name="user" value="{{index . "user_name"}}"><input type="hidden" name="app" value="{{index . "app_name"}}"><button type="submit">Approve</button></form>{{else}}-{{end}}</td>
       </tr>
       {{else}}
-      <tr><td colspan="8">No applications registered yet.</td></tr>
+      <tr><td colspan="9">No applications registered yet.</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -4677,6 +4691,7 @@ const dashboardTemplates = `
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(proto + '//' + window.location.host + '/ws/ui');
         const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+        const reportLink = (a) => a.report_abuse_url ? '<a href="' + esc(a.report_abuse_url) + '">Report abuse</a>' : 'Disabled';
         const render = async () => {
           const res = await fetch('/api/me/state', {headers: {'accept': 'application/json'}});
           if (!res.ok) return;
@@ -4687,7 +4702,7 @@ const dashboardTemplates = `
           userAPIKey.textContent = data.user.api_key;
           labelInput.value = data.user.public_user_label;
           dashboardURL.textContent = 'https://' + data.user.public_user_label + '.' + data.base_domain;
-          appsBody.innerHTML = data.apps.length ? data.apps.map((a) => '<tr><td>' + esc(a.app_name) + '</td><td>' + esc(a.approved) + '</td><td>' + esc(a.connected) + '</td><td><code>' + esc(a.public_url) + '</code></td><td>' + (a.public_port || '-') + '</td><td>' + esc(a.status) + '</td><td>' + esc(a.effective_served_by_policy) + ' <span style="color:#666">(override: ' + esc(a.served_by_override) + ')</span></td><td>' + (a.can_approve ? '<form method="post" action="/api/me/approve"><input type="hidden" name="user" value="' + esc(a.user_name) + '"><input type="hidden" name="app" value="' + esc(a.app_name) + '"><button type="submit">Approve</button></form>' : '-') + '</td></tr>').join('') : '<tr><td colspan="8">No applications registered yet.</td></tr>';
+          appsBody.innerHTML = data.apps.length ? data.apps.map((a) => '<tr><td>' + esc(a.app_name) + '</td><td>' + esc(a.approved) + '</td><td>' + esc(a.connected) + '</td><td><code>' + esc(a.public_url) + '</code></td><td>' + (a.public_port || '-') + '</td><td>' + esc(a.status) + '</td><td>' + esc(a.effective_served_by_policy) + ' <span style="color:#666">(override: ' + esc(a.served_by_override) + ')</span></td><td>' + reportLink(a) + '</td><td>' + (a.can_approve ? '<form method="post" action="/api/me/approve"><input type="hidden" name="user" value="' + esc(a.user_name) + '"><input type="hidden" name="app" value="' + esc(a.app_name) + '"><button type="submit">Approve</button></form>' : '-') + '</td></tr>').join('') : '<tr><td colspan="9">No applications registered yet.</td></tr>';
           status.textContent = 'Live updates: synced';
         };
         ws.onopen = () => { status.textContent = 'Live updates: connected'; };

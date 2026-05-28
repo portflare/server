@@ -65,6 +65,18 @@ Supported per-app overrides:
 
 Every weakening override should include a reason. Use `force_visible` or `PORTFLARE_SERVED_BY_EMERGENCY_FORCE_VISIBLE=true` when abuse response requires visible attribution across affected apps.
 
+## Owner preview
+
+App owners can use `/me` to inspect each app's current served-by policy and report-abuse link. These owner-facing fields are informational: owners can preview and troubleshoot the disclosure surface, but they cannot weaken, disable, or override required disclosure unless a future policy explicitly permits owner override.
+
+To test visible injection, open the app's public URL in a browser and confirm the page contains `Served by Portflare`, `Learn more`, and `Report abuse`. To test the fallback headers, run:
+
+```bash
+curl -i https://<app>-<user-label>.<base-domain>/
+```
+
+When disclosure is enabled, eligible HTML should include visible markup plus headers such as `X-Portflare-Served-By`, `X-Portflare-Learn-More`, and `X-Portflare-Report-Abuse`. A headers-only fallback is expected when the response is unsafe to mutate or the effective policy is `headers_only`.
+
 ## HTML rewriting behavior
 
 Portflare only injects the visible affordance into responses that are safe to mutate:
@@ -97,6 +109,18 @@ Binary responses: images, archives, PDFs, media, JSON APIs, downloads, websocket
 HTML structure: unusual documents without a normal body can still receive an appended notice, but page layout may make it less visible. The notice is an attribution and reporting aid, not a tamper-proof security badge.
 
 Tenant control: the notice runs in the app's origin. Tenant CSS or JavaScript can hide, restyle, or move it. Operators should rely on a combination of visible disclosure, fallback headers, admin review, and abuse response.
+
+## Owner troubleshooting
+
+CSP: strict `Content-Security-Policy` headers are preserved. The injected markup has no script, inline style, or external asset, but the app's own CSS can still change how it appears.
+
+Compressed responses: gzip, br, and other non-identity `Content-Encoding` responses use headers-only fallback. Test with `curl -i` and either disable upstream compression for HTML or accept the fallback.
+
+Downloads: attachments and other downloads are not rewritten. Check `Content-Disposition: attachment` and confirm the report-abuse URL appears in `X-Portflare-Report-Abuse` instead.
+
+App layout issues: unusual stacking contexts, fixed footers, full-screen canvases, or aggressive CSS resets can cover or restyle the notice. Treat these as compatibility issues to investigate with the operator, not as owner-controlled disablement.
+
+Opt-out request process: app owners who believe visible injection breaks a legitimate app should send the public app URL, reproduction steps, browser/version, response headers, and screenshots to the operator. The operator may choose `headers_only` or another admin-side exception when policy allows it, but owner controls remain informational by default.
 
 ## Visitor-facing copy policy
 
