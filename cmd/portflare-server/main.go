@@ -35,69 +35,76 @@ import (
 )
 
 type Config struct {
-	ListenAddr                   string
-	PublicBaseDomain             string
-	StatePath                    string
-	AdminUsers                   map[string]struct{}
-	RegistrationOpen             bool
-	AllowUserAppApproval         bool
-	AutoApproveForUsers          bool
-	AutoApproveForAdmins         bool
-	ServedByEnabled              bool
-	ServedByMode                 string
-	ServedByHTMLInjectionEnabled bool
-	ReportAbuseEnabled           bool
-	TrustedProxyOnly             bool
-	DisableAuth                  bool
-	LocalDevUser                 string
-	LocalDevEmail                string
-	MaxBodyBytes                 int64
-	ReadTimeout                  time.Duration
-	WriteTimeout                 time.Duration
-	IdleTimeout                  time.Duration
-	RequestTimeout               time.Duration
-	TrafficStatsInterval         time.Duration
+	ListenAddr                    string
+	PublicBaseDomain              string
+	StatePath                     string
+	AdminUsers                    map[string]struct{}
+	RegistrationOpen              bool
+	AllowUserAppApproval          bool
+	AutoApproveForUsers           bool
+	AutoApproveForAdmins          bool
+	ServedByEnabled               bool
+	ServedByMode                  string
+	ServedByHTMLInjectionEnabled  bool
+	ReportAbuseEnabled            bool
+	ServedByAppDisableAllowed     bool
+	ServedByEmergencyForceVisible bool
+	TrustedProxyOnly              bool
+	DisableAuth                   bool
+	LocalDevUser                  string
+	LocalDevEmail                 string
+	MaxBodyBytes                  int64
+	ReadTimeout                   time.Duration
+	WriteTimeout                  time.Duration
+	IdleTimeout                   time.Duration
+	RequestTimeout                time.Duration
+	TrafficStatsInterval          time.Duration
 }
 
 func loadConfig() Config {
 	return Config{
-		ListenAddr:                   env("PORTFLARE_SERVER_LISTEN_ADDR", ":8080"),
-		PublicBaseDomain:             strings.Trim(strings.ToLower(env("PORTFLARE_BASE_DOMAIN", "reverse.example.test")), "."),
-		StatePath:                    env("PORTFLARE_STATE_PATH", "/var/lib/portflare/state.json"),
-		AdminUsers:                   parseUserSet(env("PORTFLARE_ADMIN_USERS", "admin"), ","),
-		RegistrationOpen:             envBool("PORTFLARE_REGISTRATION_OPEN", true),
-		AllowUserAppApproval:         envBool("PORTFLARE_ALLOW_USER_APP_APPROVAL", false),
-		AutoApproveForUsers:          envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_USERS", false),
-		AutoApproveForAdmins:         envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_ADMINS", false),
-		ServedByEnabled:              envBool("PORTFLARE_SERVED_BY_ENABLED", true),
-		ServedByMode:                 envServedByMode("PORTFLARE_SERVED_BY_MODE", servedByModeVisibleAndHeaders),
-		ServedByHTMLInjectionEnabled: envBool("PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED", true),
-		ReportAbuseEnabled:           envBool("PORTFLARE_REPORT_ABUSE_ENABLED", true),
-		TrustedProxyOnly:             envBool("PORTFLARE_TRUST_AUTH_HEADERS", true),
-		DisableAuth:                  envBool("PORTFLARE_DISABLE_AUTH", false),
-		LocalDevUser:                 env("PORTFLARE_LOCAL_DEV_USER", "localdev"),
-		LocalDevEmail:                env("PORTFLARE_LOCAL_DEV_EMAIL", "localdev@example.test"),
-		MaxBodyBytes:                 envInt64("PORTFLARE_MAX_BODY_BYTES", 8<<20),
-		ReadTimeout:                  envDuration("PORTFLARE_READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:                 envDuration("PORTFLARE_WRITE_TIMEOUT", 30*time.Second),
-		IdleTimeout:                  envDuration("PORTFLARE_IDLE_TIMEOUT", 120*time.Second),
-		RequestTimeout:               envDuration("PORTFLARE_REQUEST_TIMEOUT", 60*time.Second),
-		TrafficStatsInterval:         envDuration("PORTFLARE_TRAFFIC_STATS_INTERVAL", 30*time.Second),
+		ListenAddr:                    env("PORTFLARE_SERVER_LISTEN_ADDR", ":8080"),
+		PublicBaseDomain:              strings.Trim(strings.ToLower(env("PORTFLARE_BASE_DOMAIN", "reverse.example.test")), "."),
+		StatePath:                     env("PORTFLARE_STATE_PATH", "/var/lib/portflare/state.json"),
+		AdminUsers:                    parseUserSet(env("PORTFLARE_ADMIN_USERS", "admin"), ","),
+		RegistrationOpen:              envBool("PORTFLARE_REGISTRATION_OPEN", true),
+		AllowUserAppApproval:          envBool("PORTFLARE_ALLOW_USER_APP_APPROVAL", false),
+		AutoApproveForUsers:           envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_USERS", false),
+		AutoApproveForAdmins:          envBool("PORTFLARE_AUTO_APPROVE_APPS_FOR_ADMINS", false),
+		ServedByEnabled:               envBool("PORTFLARE_SERVED_BY_ENABLED", true),
+		ServedByMode:                  envServedByMode("PORTFLARE_SERVED_BY_MODE", servedByModeVisibleAndHeaders),
+		ServedByHTMLInjectionEnabled:  envBool("PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED", true),
+		ReportAbuseEnabled:            envBool("PORTFLARE_REPORT_ABUSE_ENABLED", true),
+		ServedByAppDisableAllowed:     envBool("PORTFLARE_SERVED_BY_APP_DISABLE_ALLOWED", false),
+		ServedByEmergencyForceVisible: envBool("PORTFLARE_SERVED_BY_EMERGENCY_FORCE_VISIBLE", false),
+		TrustedProxyOnly:              envBool("PORTFLARE_TRUST_AUTH_HEADERS", true),
+		DisableAuth:                   envBool("PORTFLARE_DISABLE_AUTH", false),
+		LocalDevUser:                  env("PORTFLARE_LOCAL_DEV_USER", "localdev"),
+		LocalDevEmail:                 env("PORTFLARE_LOCAL_DEV_EMAIL", "localdev@example.test"),
+		MaxBodyBytes:                  envInt64("PORTFLARE_MAX_BODY_BYTES", 8<<20),
+		ReadTimeout:                   envDuration("PORTFLARE_READ_TIMEOUT", 15*time.Second),
+		WriteTimeout:                  envDuration("PORTFLARE_WRITE_TIMEOUT", 30*time.Second),
+		IdleTimeout:                   envDuration("PORTFLARE_IDLE_TIMEOUT", 120*time.Second),
+		RequestTimeout:                envDuration("PORTFLARE_REQUEST_TIMEOUT", 60*time.Second),
+		TrafficStatsInterval:          envDuration("PORTFLARE_TRAFFIC_STATS_INTERVAL", 30*time.Second),
 	}
 }
 
 type State struct {
-	RegistrationOpen             bool                    `json:"registration_open"`
-	AllowUserAppApproval         bool                    `json:"allow_user_app_approval"`
-	AutoApproveForUsers          bool                    `json:"auto_approve_for_users"`
-	AutoApproveForAdmins         bool                    `json:"auto_approve_for_admins"`
-	ServedByEnabled              bool                    `json:"served_by_enabled"`
-	ServedByMode                 string                  `json:"served_by_mode"`
-	ServedByHTMLInjectionEnabled bool                    `json:"served_by_html_injection_enabled"`
-	ReportAbuseEnabled           bool                    `json:"report_abuse_enabled"`
-	Users                        map[string]*User        `json:"users"`
-	Apps                         map[string]*App         `json:"apps"`
-	AbuseReports                 map[string]*AbuseReport `json:"abuse_reports,omitempty"`
+	RegistrationOpen              bool                    `json:"registration_open"`
+	AllowUserAppApproval          bool                    `json:"allow_user_app_approval"`
+	AutoApproveForUsers           bool                    `json:"auto_approve_for_users"`
+	AutoApproveForAdmins          bool                    `json:"auto_approve_for_admins"`
+	ServedByEnabled               bool                    `json:"served_by_enabled"`
+	ServedByMode                  string                  `json:"served_by_mode"`
+	ServedByHTMLInjectionEnabled  bool                    `json:"served_by_html_injection_enabled"`
+	ReportAbuseEnabled            bool                    `json:"report_abuse_enabled"`
+	ServedByAppDisableAllowed     bool                    `json:"served_by_app_disable_allowed"`
+	ServedByEmergencyForceVisible bool                    `json:"served_by_emergency_force_visible"`
+	Users                         map[string]*User        `json:"users"`
+	Apps                          map[string]*App         `json:"apps"`
+	AbuseReports                  map[string]*AbuseReport `json:"abuse_reports,omitempty"`
+	AuditEvents                   []AuditEvent            `json:"audit_events,omitempty"`
 }
 
 type User struct {
@@ -111,15 +118,31 @@ type User struct {
 }
 
 type App struct {
-	ID         string    `json:"id"`
-	UserName   string    `json:"user_name"`
-	AppName    string    `json:"app_name"`
-	PublicPort int       `json:"public_port,omitempty"`
-	Approved   bool      `json:"approved"`
-	Connected  bool      `json:"connected"`
-	LastSeenAt time.Time `json:"last_seen_at"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID                        string    `json:"id"`
+	UserName                  string    `json:"user_name"`
+	AppName                   string    `json:"app_name"`
+	PublicPort                int       `json:"public_port,omitempty"`
+	Approved                  bool      `json:"approved"`
+	Connected                 bool      `json:"connected"`
+	ServedByOverride          string    `json:"served_by_override"`
+	ServedByOverrideReason    string    `json:"served_by_override_reason,omitempty"`
+	ServedByOverrideUpdatedBy string    `json:"served_by_override_updated_by,omitempty"`
+	ServedByOverrideUpdatedAt time.Time `json:"served_by_override_updated_at,omitempty"`
+	LastSeenAt                time.Time `json:"last_seen_at"`
+	CreatedAt                 time.Time `json:"created_at"`
+	UpdatedAt                 time.Time `json:"updated_at"`
+}
+
+type AuditEvent struct {
+	ID             string    `json:"id"`
+	Action         string    `json:"action"`
+	ActorUserName  string    `json:"actor_user_name"`
+	TargetUserName string    `json:"target_user_name,omitempty"`
+	TargetAppName  string    `json:"target_app_name,omitempty"`
+	OldValue       string    `json:"old_value,omitempty"`
+	NewValue       string    `json:"new_value,omitempty"`
+	Reason         string    `json:"reason,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type AbuseReport struct {
@@ -423,17 +446,19 @@ func (s *Server) loadState() error {
 		if errors.Is(err, os.ErrNotExist) {
 			settings := defaultServedBySettingsFromConfig(s.cfg)
 			s.state = State{
-				RegistrationOpen:             s.cfg.RegistrationOpen,
-				AllowUserAppApproval:         s.cfg.AllowUserAppApproval,
-				AutoApproveForUsers:          s.cfg.AutoApproveForUsers,
-				AutoApproveForAdmins:         s.cfg.AutoApproveForAdmins,
-				ServedByEnabled:              settings.Enabled,
-				ServedByMode:                 settings.Mode,
-				ServedByHTMLInjectionEnabled: settings.HTMLInjectionEnabled,
-				ReportAbuseEnabled:           settings.ReportAbuseEnabled,
-				Users:                        map[string]*User{},
-				Apps:                         map[string]*App{},
-				AbuseReports:                 map[string]*AbuseReport{},
+				RegistrationOpen:              s.cfg.RegistrationOpen,
+				AllowUserAppApproval:          s.cfg.AllowUserAppApproval,
+				AutoApproveForUsers:           s.cfg.AutoApproveForUsers,
+				AutoApproveForAdmins:          s.cfg.AutoApproveForAdmins,
+				ServedByEnabled:               settings.Enabled,
+				ServedByMode:                  settings.Mode,
+				ServedByHTMLInjectionEnabled:  settings.HTMLInjectionEnabled,
+				ReportAbuseEnabled:            settings.ReportAbuseEnabled,
+				ServedByAppDisableAllowed:     settings.AppDisableAllowed,
+				ServedByEmergencyForceVisible: settings.EmergencyForceVisible,
+				Users:                         map[string]*User{},
+				Apps:                          map[string]*App{},
+				AbuseReports:                  map[string]*AbuseReport{},
 			}
 			return s.saveStateLocked()
 		}
@@ -483,6 +508,14 @@ func (s *Server) loadState() error {
 		st.ReportAbuseEnabled = defaultSettings.ReportAbuseEnabled
 		changed = true
 	}
+	if _, ok := rawState["served_by_app_disable_allowed"]; !ok {
+		st.ServedByAppDisableAllowed = defaultSettings.AppDisableAllowed
+		changed = true
+	}
+	if _, ok := rawState["served_by_emergency_force_visible"]; !ok {
+		st.ServedByEmergencyForceVisible = defaultSettings.EmergencyForceVisible
+		changed = true
+	}
 	seenLabels := map[string]string{}
 	for key, user := range st.Users {
 		if user.PublicUserLabel == "" {
@@ -503,6 +536,22 @@ func (s *Server) loadState() error {
 				return fmt.Errorf("duplicate public user alias %q in state for users %q and %q", alias, other, key)
 			}
 			seenLabels[alias] = key
+		}
+	}
+	for _, app := range st.Apps {
+		override, ok := normalizeServedByAppOverride(app.ServedByOverride)
+		if !ok {
+			override = servedByAppOverrideInherit
+		}
+		if app.ServedByOverride != override {
+			app.ServedByOverride = override
+			changed = true
+		}
+		if override != servedByAppOverrideHeadersOnly && override != servedByAppOverrideDisabled {
+			if app.ServedByOverrideReason != "" {
+				app.ServedByOverrideReason = ""
+				changed = true
+			}
 		}
 	}
 	s.state = st
@@ -544,6 +593,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/admin/traffic", s.handleAdminTraffic)
 	mux.HandleFunc("/admin/toggle-registration", s.handleToggleRegistration)
 	mux.HandleFunc("/admin/toggle-setting", s.handleToggleSetting)
+	mux.HandleFunc("/api/admin/app-served-by-override", s.handleAdminAppServedByOverride)
 	mux.HandleFunc("/api/admin/approve", s.handleApproveApp)
 	mux.HandleFunc("/me", s.handleUserPage)
 	mux.HandleFunc("/api/me/state", s.handleUserState)
@@ -1215,6 +1265,11 @@ func (s *Server) upsertApp(userName, appName string, publicPort int) (*App, erro
 
 	existing, ok := s.state.Apps[id]
 	if ok {
+		if override, ok := normalizeServedByAppOverride(existing.ServedByOverride); ok {
+			existing.ServedByOverride = override
+		} else {
+			existing.ServedByOverride = servedByAppOverrideInherit
+		}
 		if publicPort > 0 {
 			existing.PublicPort = publicPort
 		}
@@ -1232,15 +1287,16 @@ func (s *Server) upsertApp(userName, appName string, publicPort int) (*App, erro
 	}
 
 	app := &App{
-		ID:         id,
-		UserName:   userName,
-		AppName:    appName,
-		PublicPort: publicPort,
-		Approved:   shouldAutoApprove,
-		Connected:  true,
-		LastSeenAt: now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:               id,
+		UserName:         userName,
+		AppName:          appName,
+		PublicPort:       publicPort,
+		Approved:         shouldAutoApprove,
+		Connected:        true,
+		ServedByOverride: servedByAppOverrideInherit,
+		LastSeenAt:       now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	s.state.Apps[id] = app
 	if err := s.saveStateLocked(); err != nil {
@@ -1258,21 +1314,6 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 		cp := *u
 		users = append(users, &cp)
 	}
-	for _, a := range s.state.Apps {
-		cp := *a
-		publicLabel := cp.UserName
-		if user, ok := s.state.Users[cp.UserName]; ok && user.PublicUserLabel != "" {
-			publicLabel = user.PublicUserLabel
-		}
-		apps = append(apps, map[string]any{
-			"user_name":   cp.UserName,
-			"app_name":    cp.AppName,
-			"approved":    cp.Approved,
-			"connected":   cp.Connected,
-			"public_port": cp.PublicPort,
-			"public_url":  fmt.Sprintf("https://%s-%s.%s", cp.AppName, publicLabel, s.cfg.PublicBaseDomain),
-		})
-	}
 	registrationOpen := s.state.RegistrationOpen
 	allowUserAppApproval := s.state.AllowUserAppApproval
 	autoApproveForUsers := s.state.AutoApproveForUsers
@@ -1281,6 +1322,33 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 	servedByMode := s.state.ServedByMode
 	servedByHTMLInjectionEnabled := s.state.ServedByHTMLInjectionEnabled
 	reportAbuseEnabled := s.state.ReportAbuseEnabled
+	servedByAppDisableAllowed := s.state.ServedByAppDisableAllowed
+	servedByEmergencyForceVisible := s.state.ServedByEmergencyForceVisible
+	globalSettings := servedBySettingsFromState(defaultServedBySettingsFromConfig(s.cfg), s.state)
+	for _, a := range s.state.Apps {
+		cp := *a
+		publicLabel := cp.UserName
+		if user, ok := s.state.Users[cp.UserName]; ok && user.PublicUserLabel != "" {
+			publicLabel = user.PublicUserLabel
+		}
+		override, ok := normalizeServedByAppOverride(cp.ServedByOverride)
+		if !ok {
+			override = servedByAppOverrideInherit
+		}
+		effective := effectiveServedBySettings(globalSettings, override)
+		apps = append(apps, map[string]any{
+			"user_name":                     cp.UserName,
+			"app_name":                      cp.AppName,
+			"approved":                      cp.Approved,
+			"connected":                     cp.Connected,
+			"public_port":                   cp.PublicPort,
+			"public_url":                    fmt.Sprintf("https://%s-%s.%s", cp.AppName, publicLabel, s.cfg.PublicBaseDomain),
+			"served_by_override":            override,
+			"served_by_override_reason":     cp.ServedByOverrideReason,
+			"effective_served_by_policy":    servedByPolicyName(effective),
+			"served_by_override_updated_by": cp.ServedByOverrideUpdatedBy,
+		})
+	}
 	s.stateMu.RUnlock()
 	if mode, ok := normalizeServedByMode(servedByMode); ok {
 		servedByMode = mode
@@ -1288,10 +1356,12 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 		servedByMode = defaultServedBySettingsFromConfig(s.cfg).Mode
 	}
 	servedByWarnings := servedBySettingWarnings(servedBySettings{
-		Enabled:              servedByEnabled,
-		Mode:                 servedByMode,
-		HTMLInjectionEnabled: servedByHTMLInjectionEnabled,
-		ReportAbuseEnabled:   reportAbuseEnabled,
+		Enabled:               servedByEnabled,
+		Mode:                  servedByMode,
+		HTMLInjectionEnabled:  servedByHTMLInjectionEnabled,
+		ReportAbuseEnabled:    reportAbuseEnabled,
+		AppDisableAllowed:     servedByAppDisableAllowed,
+		EmergencyForceVisible: servedByEmergencyForceVisible,
 	})
 
 	sort.Slice(users, func(i, j int) bool { return users[i].UserName < users[j].UserName })
@@ -1299,19 +1369,22 @@ func (s *Server) adminViewData(identity authIdentity) map[string]any {
 		return fmt.Sprint(apps[i]["user_name"], "/", apps[i]["app_name"]) < fmt.Sprint(apps[j]["user_name"], "/", apps[j]["app_name"])
 	})
 	return map[string]any{
-		"identity":                         map[string]any{"user_name": identity.UserName},
-		"registration_open":                registrationOpen,
-		"allow_user_app_approval":          allowUserAppApproval,
-		"auto_approve_for_users":           autoApproveForUsers,
-		"auto_approve_for_admins":          autoApproveForAdmins,
-		"served_by_enabled":                servedByEnabled,
-		"served_by_mode":                   servedByMode,
-		"served_by_html_injection_enabled": servedByHTMLInjectionEnabled,
-		"report_abuse_enabled":             reportAbuseEnabled,
-		"served_by_warnings":               servedByWarnings,
-		"users":                            users,
-		"apps":                             apps,
-		"base_domain":                      s.cfg.PublicBaseDomain,
+		"identity":                          map[string]any{"user_name": identity.UserName},
+		"registration_open":                 registrationOpen,
+		"allow_user_app_approval":           allowUserAppApproval,
+		"auto_approve_for_users":            autoApproveForUsers,
+		"auto_approve_for_admins":           autoApproveForAdmins,
+		"served_by_enabled":                 servedByEnabled,
+		"served_by_mode":                    servedByMode,
+		"served_by_html_injection_enabled":  servedByHTMLInjectionEnabled,
+		"report_abuse_enabled":              reportAbuseEnabled,
+		"served_by_app_disable_allowed":     servedByAppDisableAllowed,
+		"served_by_emergency_force_visible": servedByEmergencyForceVisible,
+		"served_by_warnings":                servedByWarnings,
+		"served_by_app_override_options":    servedByAppOverrideOptions(),
+		"users":                             users,
+		"apps":                              apps,
+		"base_domain":                       s.cfg.PublicBaseDomain,
 	}
 }
 
@@ -1327,19 +1400,22 @@ func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 
 	data := s.adminViewData(identity)
 	_ = s.templates.ExecuteTemplate(w, "admin", map[string]any{
-		"Identity":                     data["identity"].(map[string]any),
-		"RegistrationOpen":             data["registration_open"],
-		"AllowUserAppApproval":         data["allow_user_app_approval"],
-		"AutoApproveForUsers":          data["auto_approve_for_users"],
-		"AutoApproveForAdmins":         data["auto_approve_for_admins"],
-		"ServedByEnabled":              data["served_by_enabled"],
-		"ServedByMode":                 data["served_by_mode"],
-		"ServedByHTMLInjectionEnabled": data["served_by_html_injection_enabled"],
-		"ReportAbuseEnabled":           data["report_abuse_enabled"],
-		"ServedByWarnings":             data["served_by_warnings"],
-		"Users":                        data["users"],
-		"Apps":                         data["apps"],
-		"BaseDomain":                   data["base_domain"],
+		"Identity":                      data["identity"].(map[string]any),
+		"RegistrationOpen":              data["registration_open"],
+		"AllowUserAppApproval":          data["allow_user_app_approval"],
+		"AutoApproveForUsers":           data["auto_approve_for_users"],
+		"AutoApproveForAdmins":          data["auto_approve_for_admins"],
+		"ServedByEnabled":               data["served_by_enabled"],
+		"ServedByMode":                  data["served_by_mode"],
+		"ServedByHTMLInjectionEnabled":  data["served_by_html_injection_enabled"],
+		"ReportAbuseEnabled":            data["report_abuse_enabled"],
+		"ServedByAppDisableAllowed":     data["served_by_app_disable_allowed"],
+		"ServedByEmergencyForceVisible": data["served_by_emergency_force_visible"],
+		"ServedByWarnings":              data["served_by_warnings"],
+		"ServedByAppOverrideOptions":    data["served_by_app_override_options"],
+		"Users":                         data["users"],
+		"Apps":                          data["apps"],
+		"BaseDomain":                    data["base_domain"],
 	})
 }
 
@@ -1495,6 +1571,24 @@ func (s *Server) handleToggleSetting(w http.ResponseWriter, r *http.Request) {
 		}
 		s.state.ReportAbuseEnabled = parsed
 		value = s.state.ReportAbuseEnabled
+	case "served_by_app_disable_allowed":
+		parsed, err := settingBoolFormValue(r, s.state.ServedByAppDisableAllowed)
+		if err != nil {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.state.ServedByAppDisableAllowed = parsed
+		value = s.state.ServedByAppDisableAllowed
+	case "served_by_emergency_force_visible":
+		parsed, err := settingBoolFormValue(r, s.state.ServedByEmergencyForceVisible)
+		if err != nil {
+			s.stateMu.Unlock()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.state.ServedByEmergencyForceVisible = parsed
+		value = s.state.ServedByEmergencyForceVisible
 	case "served_by_mode":
 		mode, ok := normalizeServedByMode(r.Form.Get("value"))
 		if !ok {
@@ -1514,10 +1608,12 @@ func (s *Server) handleToggleSetting(w http.ResponseWriter, r *http.Request) {
 		mode = defaultServedBySettingsFromConfig(s.cfg).Mode
 	}
 	warnings := servedBySettingWarnings(servedBySettings{
-		Enabled:              s.state.ServedByEnabled,
-		Mode:                 mode,
-		HTMLInjectionEnabled: s.state.ServedByHTMLInjectionEnabled,
-		ReportAbuseEnabled:   s.state.ReportAbuseEnabled,
+		Enabled:               s.state.ServedByEnabled,
+		Mode:                  mode,
+		HTMLInjectionEnabled:  s.state.ServedByHTMLInjectionEnabled,
+		ReportAbuseEnabled:    s.state.ReportAbuseEnabled,
+		AppDisableAllowed:     s.state.ServedByAppDisableAllowed,
+		EmergencyForceVisible: s.state.ServedByEmergencyForceVisible,
 	})
 	err := s.saveStateLocked()
 	s.stateMu.Unlock()
@@ -1528,6 +1624,110 @@ func (s *Server) handleToggleSetting(w http.ResponseWriter, r *http.Request) {
 	s.notifyUISubscribers()
 	if wantsJSON(r) {
 		writeJSON(w, http.StatusOK, map[string]any{"setting": setting, "value": value, "warnings": warnings})
+		return
+	}
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
+func (s *Server) handleAdminAppServedByOverride(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	identity, ok := s.requireIdentity(w, r)
+	if !ok {
+		return
+	}
+	if !identity.IsAdmin {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	userName := slug(r.Form.Get("user"))
+	appName := slug(r.Form.Get("app"))
+	if userName == "" || appName == "" {
+		writeError(w, http.StatusBadRequest, "user and app are required")
+		return
+	}
+	override, ok := normalizeServedByAppOverride(r.Form.Get("override"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "served-by override must be inherit, force_visible, headers_only, or disabled")
+		return
+	}
+	reason := strings.TrimSpace(r.Form.Get("reason"))
+	if servedByOverrideWeakensDisclosure(override) && reason == "" {
+		writeError(w, http.StatusBadRequest, "reason is required when weakening served-by disclosure")
+		return
+	}
+
+	s.stateMu.Lock()
+	app, ok := s.state.Apps[appKey(userName, appName)]
+	if !ok {
+		s.stateMu.Unlock()
+		writeError(w, http.StatusNotFound, "app not found")
+		return
+	}
+	if override == servedByAppOverrideDisabled && !s.state.ServedByAppDisableAllowed {
+		s.stateMu.Unlock()
+		writeError(w, http.StatusForbidden, "per-app served-by disable is not globally allowed")
+		return
+	}
+
+	oldOverride, ok := normalizeServedByAppOverride(app.ServedByOverride)
+	if !ok {
+		oldOverride = servedByAppOverrideInherit
+	}
+	now := time.Now().UTC()
+	app.ServedByOverride = override
+	if servedByOverrideWeakensDisclosure(override) {
+		app.ServedByOverrideReason = reason
+	} else {
+		app.ServedByOverrideReason = ""
+	}
+	storedReason := app.ServedByOverrideReason
+	app.ServedByOverrideUpdatedBy = identity.UserName
+	app.ServedByOverrideUpdatedAt = now
+	app.UpdatedAt = now
+
+	if s.state.AuditEvents == nil {
+		s.state.AuditEvents = []AuditEvent{}
+	}
+	s.state.AuditEvents = append(s.state.AuditEvents, AuditEvent{
+		ID:             "aud_" + randomToken(8),
+		Action:         auditActionAppServedByOverrideUpdated,
+		ActorUserName:  identity.UserName,
+		TargetUserName: userName,
+		TargetAppName:  appName,
+		OldValue:       oldOverride,
+		NewValue:       override,
+		Reason:         storedReason,
+		CreatedAt:      now,
+	})
+
+	effective := effectiveServedBySettings(servedBySettingsFromState(defaultServedBySettingsFromConfig(s.cfg), s.state), override)
+	err := s.saveStateLocked()
+	s.stateMu.Unlock()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.notifyUISubscribers()
+	if s.logger != nil {
+		s.logger.Info("app served-by override updated", "actor", identity.UserName, "user", userName, "app", appName, "old_override", oldOverride, "new_override", override)
+	}
+
+	if wantsJSON(r) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"user":                       userName,
+			"app":                        appName,
+			"served_by_override":         override,
+			"served_by_override_reason":  storedReason,
+			"effective_served_by_policy": servedByPolicyName(effective),
+			"audit_prepared":             true,
+		})
 		return
 	}
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
@@ -1592,6 +1792,7 @@ func (s *Server) userViewData(identity authIdentity, userName string) (map[strin
 
 	s.stateMu.RLock()
 	allowUserAppApproval := s.state.AllowUserAppApproval
+	globalSettings := servedBySettingsFromState(defaultServedBySettingsFromConfig(s.cfg), s.state)
 	apps := make([]map[string]any, 0)
 	for _, a := range s.state.Apps {
 		if a.UserName != user.UserName {
@@ -1599,12 +1800,19 @@ func (s *Server) userViewData(identity authIdentity, userName string) (map[strin
 		}
 		cp := *a
 		canApprove := identity.IsAdmin || (allowUserAppApproval && !cp.Approved)
+		override, ok := normalizeServedByAppOverride(cp.ServedByOverride)
+		if !ok {
+			override = servedByAppOverrideInherit
+		}
+		effective := effectiveServedBySettings(globalSettings, override)
 		apps = append(apps, map[string]any{
-			"app_name":    cp.AppName,
-			"approved":    cp.Approved,
-			"connected":   cp.Connected,
-			"public_port": cp.PublicPort,
-			"public_url":  fmt.Sprintf("https://%s-%s.%s", cp.AppName, user.PublicUserLabel, s.cfg.PublicBaseDomain),
+			"app_name":                   cp.AppName,
+			"approved":                   cp.Approved,
+			"connected":                  cp.Connected,
+			"public_port":                cp.PublicPort,
+			"public_url":                 fmt.Sprintf("https://%s-%s.%s", cp.AppName, user.PublicUserLabel, s.cfg.PublicBaseDomain),
+			"served_by_override":         override,
+			"effective_served_by_policy": servedByPolicyName(effective),
 			"status": func() string {
 				if cp.Approved {
 					return "approved"
@@ -1843,6 +2051,14 @@ const (
 
 	servedByModeVisibleAndHeaders = "visible_and_headers"
 	servedByModeHeadersOnly       = "headers_only"
+	servedByPolicyDisabled        = "disabled"
+
+	servedByAppOverrideInherit      = "inherit"
+	servedByAppOverrideForceVisible = "force_visible"
+	servedByAppOverrideHeadersOnly  = "headers_only"
+	servedByAppOverrideDisabled     = "disabled"
+
+	auditActionAppServedByOverrideUpdated = "app_served_by_override_updated"
 
 	learnMorePath = "/about-portflare"
 	reportPath    = "/report-abuse"
@@ -1870,10 +2086,12 @@ func (d responseDecorationDecision) String() string {
 }
 
 type servedBySettings struct {
-	Enabled              bool
-	Mode                 string
-	HTMLInjectionEnabled bool
-	ReportAbuseEnabled   bool
+	Enabled               bool
+	Mode                  string
+	HTMLInjectionEnabled  bool
+	ReportAbuseEnabled    bool
+	AppDisableAllowed     bool
+	EmergencyForceVisible bool
 }
 
 func defaultServedBySettingsFromConfig(cfg Config) servedBySettings {
@@ -1882,15 +2100,19 @@ func defaultServedBySettingsFromConfig(cfg Config) servedBySettings {
 		mode = servedByModeVisibleAndHeaders
 	}
 	settings := servedBySettings{
-		Enabled:              cfg.ServedByEnabled,
-		Mode:                 mode,
-		HTMLInjectionEnabled: cfg.ServedByHTMLInjectionEnabled,
-		ReportAbuseEnabled:   cfg.ReportAbuseEnabled,
+		Enabled:               cfg.ServedByEnabled,
+		Mode:                  mode,
+		HTMLInjectionEnabled:  cfg.ServedByHTMLInjectionEnabled,
+		ReportAbuseEnabled:    cfg.ReportAbuseEnabled,
+		AppDisableAllowed:     cfg.ServedByAppDisableAllowed,
+		EmergencyForceVisible: cfg.ServedByEmergencyForceVisible,
 	}
 	if strings.TrimSpace(cfg.ServedByMode) == "" {
 		settings.Enabled = true
 		settings.HTMLInjectionEnabled = true
 		settings.ReportAbuseEnabled = true
+		settings.AppDisableAllowed = cfg.ServedByAppDisableAllowed
+		settings.EmergencyForceVisible = cfg.ServedByEmergencyForceVisible
 	}
 	return settings
 }
@@ -1899,19 +2121,85 @@ func (s *Server) currentServedBySettings() servedBySettings {
 	defaults := defaultServedBySettingsFromConfig(s.cfg)
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
-	if strings.TrimSpace(s.state.ServedByMode) == "" {
+	return servedBySettingsFromState(defaults, s.state)
+}
+
+func (s *Server) currentServedBySettingsForApp(userName, appName string) servedBySettings {
+	defaults := defaultServedBySettingsFromConfig(s.cfg)
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+
+	global := servedBySettingsFromState(defaults, s.state)
+	override := servedByAppOverrideInherit
+	if app := s.state.Apps[appKey(userName, appName)]; app != nil {
+		if normalized, ok := normalizeServedByAppOverride(app.ServedByOverride); ok {
+			override = normalized
+		}
+	}
+	return effectiveServedBySettings(global, override)
+}
+
+func servedBySettingsFromState(defaults servedBySettings, st State) servedBySettings {
+	if strings.TrimSpace(st.ServedByMode) == "" {
 		return defaults
 	}
-	mode, ok := normalizeServedByMode(s.state.ServedByMode)
+	mode, ok := normalizeServedByMode(st.ServedByMode)
 	if !ok {
 		mode = defaults.Mode
 	}
 	return servedBySettings{
-		Enabled:              s.state.ServedByEnabled,
-		Mode:                 mode,
-		HTMLInjectionEnabled: s.state.ServedByHTMLInjectionEnabled,
-		ReportAbuseEnabled:   s.state.ReportAbuseEnabled,
+		Enabled:               st.ServedByEnabled,
+		Mode:                  mode,
+		HTMLInjectionEnabled:  st.ServedByHTMLInjectionEnabled,
+		ReportAbuseEnabled:    st.ReportAbuseEnabled,
+		AppDisableAllowed:     st.ServedByAppDisableAllowed,
+		EmergencyForceVisible: st.ServedByEmergencyForceVisible,
 	}
+}
+
+func effectiveServedBySettings(global servedBySettings, override string) servedBySettings {
+	settings := global
+	if settings.EmergencyForceVisible {
+		settings.Enabled = true
+		settings.Mode = servedByModeVisibleAndHeaders
+		settings.HTMLInjectionEnabled = true
+		settings.ReportAbuseEnabled = true
+		return settings
+	}
+
+	normalized, ok := normalizeServedByAppOverride(override)
+	if !ok || normalized == servedByAppOverrideInherit {
+		return settings
+	}
+	switch normalized {
+	case servedByAppOverrideForceVisible:
+		settings.Enabled = true
+		settings.Mode = servedByModeVisibleAndHeaders
+		settings.HTMLInjectionEnabled = true
+	case servedByAppOverrideHeadersOnly:
+		settings.Enabled = true
+		settings.Mode = servedByModeHeadersOnly
+		settings.HTMLInjectionEnabled = false
+	case servedByAppOverrideDisabled:
+		if settings.AppDisableAllowed {
+			settings.Enabled = false
+			settings.HTMLInjectionEnabled = false
+		}
+	}
+	return settings
+}
+
+func servedByPolicyName(settings servedBySettings) string {
+	if settings.EmergencyForceVisible {
+		return servedByModeVisibleAndHeaders
+	}
+	if !settings.Enabled {
+		return servedByPolicyDisabled
+	}
+	if settings.Mode == servedByModeHeadersOnly || !settings.HTMLInjectionEnabled {
+		return servedByModeHeadersOnly
+	}
+	return servedByModeVisibleAndHeaders
 }
 
 func normalizeServedByMode(raw string) (string, bool) {
@@ -1923,6 +2211,35 @@ func normalizeServedByMode(raw string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func normalizeServedByAppOverride(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", servedByAppOverrideInherit:
+		return servedByAppOverrideInherit, true
+	case servedByAppOverrideForceVisible:
+		return servedByAppOverrideForceVisible, true
+	case servedByAppOverrideHeadersOnly:
+		return servedByAppOverrideHeadersOnly, true
+	case servedByAppOverrideDisabled:
+		return servedByAppOverrideDisabled, true
+	default:
+		return "", false
+	}
+}
+
+func servedByAppOverrideOptions() []map[string]string {
+	return []map[string]string{
+		{"Value": servedByAppOverrideInherit, "Label": "Inherit global policy"},
+		{"Value": servedByAppOverrideForceVisible, "Label": "Force visible"},
+		{"Value": servedByAppOverrideHeadersOnly, "Label": "Headers only"},
+		{"Value": servedByAppOverrideDisabled, "Label": "Disabled"},
+	}
+}
+
+func servedByOverrideWeakensDisclosure(override string) bool {
+	normalized, ok := normalizeServedByAppOverride(override)
+	return ok && (normalized == servedByAppOverrideHeadersOnly || normalized == servedByAppOverrideDisabled)
 }
 
 func envServedByMode(key, fallback string) string {
@@ -1945,6 +2262,12 @@ func servedBySettingWarnings(settings servedBySettings) []string {
 	}
 	if !settings.ReportAbuseEnabled {
 		warnings = append(warnings, "Disabling report abuse removes public abuse intake links and endpoints.")
+	}
+	if settings.AppDisableAllowed {
+		warnings = append(warnings, "Per-app served-by disable is globally allowed; require documented compatibility reasons for each exception.")
+	}
+	if settings.EmergencyForceVisible {
+		warnings = append(warnings, "Emergency force-visible is active and overrides per-app served-by settings.")
 	}
 	return warnings
 }
@@ -2239,7 +2562,7 @@ func isSafePublicUserLabel(label string) bool {
 func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, appName string) {
 	started := time.Now()
 
-	settings := s.currentServedBySettings()
+	settings := s.currentServedBySettingsForApp(userName, appName)
 	s.stateMu.RLock()
 	app, ok := s.state.Apps[appKey(userName, appName)]
 	publicUserLabel := ""
@@ -2975,12 +3298,16 @@ const dashboardTemplates = `
       <li>Served-by mode: <strong id="served-by-mode">{{.ServedByMode}}</strong></li>
       <li>HTML injection enabled: <strong id="served-by-html-injection-enabled">{{.ServedByHTMLInjectionEnabled}}</strong></li>
       <li>Report abuse enabled: <strong id="report-abuse-enabled">{{.ReportAbuseEnabled}}</strong></li>
+      <li>Per-app disable allowed: <strong id="served-by-app-disable-allowed">{{.ServedByAppDisableAllowed}}</strong></li>
+      <li>Emergency force visible: <strong id="served-by-emergency-force-visible">{{.ServedByEmergencyForceVisible}}</strong></li>
     </ul>
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_enabled"><button type="submit">Toggle served-by</button></form>
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_mode"><input type="hidden" name="value" value="visible_and_headers"><button type="submit">Use visible and headers mode</button></form>
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_mode"><input type="hidden" name="value" value="headers_only"><button type="submit">Use headers-only mode</button></form>
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_html_injection_enabled"><button type="submit">Toggle HTML injection</button></form>
     <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="report_abuse_enabled"><button type="submit">Toggle report abuse</button></form>
+    <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_app_disable_allowed"><button type="submit">Toggle per-app disable allowance</button></form>
+    <form method="post" action="/admin/toggle-setting"><input type="hidden" name="setting" value="served_by_emergency_force_visible"><button type="submit">Toggle emergency force visible</button></form>
 
     <h2>Users</h2>
     <table>
@@ -2996,20 +3323,32 @@ const dashboardTemplates = `
 
     <h2>Applications</h2>
     <table>
-      <tr><th>User</th><th>App</th><th>Approved</th><th>Connected</th><th>Public</th><th>Port</th><th>Status</th></tr>
+      <tr><th>User</th><th>App</th><th>Approved</th><th>Connected</th><th>Public</th><th>Port</th><th>Status</th><th>Served-by policy</th><th>Override</th></tr>
       <tbody id="apps-body">
-      {{range .Apps}}
+      {{range $app := .Apps}}
       <tr>
-        <td>{{index . "user_name"}}</td>
-        <td>{{index . "app_name"}}</td>
-        <td>{{index . "approved"}}</td>
-        <td>{{index . "connected"}}</td>
-        <td><code>{{index . "public_url"}}</code></td>
-        <td>{{with index . "public_port"}}{{.}}{{else}}-{{end}}</td>
-        <td>{{if index . "approved"}}approved{{else}}pending{{end}}</td>
+        <td>{{index $app "user_name"}}</td>
+        <td>{{index $app "app_name"}}</td>
+        <td>{{index $app "approved"}}</td>
+        <td>{{index $app "connected"}}</td>
+        <td><code>{{index $app "public_url"}}</code></td>
+        <td>{{with index $app "public_port"}}{{.}}{{else}}-{{end}}</td>
+        <td>{{if index $app "approved"}}approved{{else}}pending{{end}}</td>
+        <td><strong>{{index $app "effective_served_by_policy"}}</strong><br><span class="muted">override: {{index $app "served_by_override"}}</span>{{with index $app "served_by_override_reason"}}<br><span class="muted">reason: {{.}}</span>{{end}}</td>
+        <td>
+          <form method="post" action="/api/admin/app-served-by-override">
+            <input type="hidden" name="user" value="{{index $app "user_name"}}">
+            <input type="hidden" name="app" value="{{index $app "app_name"}}">
+            <select name="override">
+              {{range $opt := $.ServedByAppOverrideOptions}}<option value="{{index $opt "Value"}}" {{if eq (index $app "served_by_override") (index $opt "Value")}}selected{{end}}>{{index $opt "Label"}}</option>{{end}}
+            </select>
+            <input type="text" name="reason" value="{{index $app "served_by_override_reason"}}" placeholder="Reason for weakening">
+            <button type="submit">Update</button>
+          </form>
+        </td>
       </tr>
       {{else}}
-      <tr><td colspan="7">No applications registered.</td></tr>
+      <tr><td colspan="9">No applications registered.</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -3027,9 +3366,16 @@ const dashboardTemplates = `
         const servedByMode = document.getElementById('served-by-mode');
         const servedByHTMLInjectionEnabled = document.getElementById('served-by-html-injection-enabled');
         const reportAbuseEnabled = document.getElementById('report-abuse-enabled');
+        const servedByAppDisableAllowed = document.getElementById('served-by-app-disable-allowed');
+        const servedByEmergencyForceVisible = document.getElementById('served-by-emergency-force-visible');
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(proto + '//' + window.location.host + '/ws/ui');
         const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+        const overrideForm = (a, options) => {
+          const selected = String(a.served_by_override || 'inherit');
+          const opts = (options || []).map((o) => '<option value="' + esc(o.Value) + '"' + (selected === o.Value ? ' selected' : '') + '>' + esc(o.Label) + '</option>').join('');
+          return '<form method="post" action="/api/admin/app-served-by-override"><input type="hidden" name="user" value="' + esc(a.user_name) + '"><input type="hidden" name="app" value="' + esc(a.app_name) + '"><select name="override">' + opts + '</select> <input type="text" name="reason" value="' + esc(a.served_by_override_reason || '') + '" placeholder="Reason for weakening"> <button type="submit">Update</button></form>';
+        };
         const render = async () => {
           const res = await fetch('/api/admin/state', {headers: {'accept': 'application/json'}});
           if (!res.ok) return;
@@ -3042,8 +3388,10 @@ const dashboardTemplates = `
           servedByMode.textContent = String(data.served_by_mode);
           servedByHTMLInjectionEnabled.textContent = String(data.served_by_html_injection_enabled);
           reportAbuseEnabled.textContent = String(data.report_abuse_enabled);
+          servedByAppDisableAllowed.textContent = String(data.served_by_app_disable_allowed);
+          servedByEmergencyForceVisible.textContent = String(data.served_by_emergency_force_visible);
           usersBody.innerHTML = data.users.length ? data.users.map((u) => '<tr><td><a href="/me">' + esc(u.user_name) + '</a></td><td>' + esc(u.email) + '</td><td>' + esc(u.created_at) + '</td></tr>').join('') : '<tr><td colspan="3">No users yet.</td></tr>';
-          appsBody.innerHTML = data.apps.length ? data.apps.map((a) => '<tr><td>' + esc(a.user_name) + '</td><td>' + esc(a.app_name) + '</td><td>' + esc(a.approved) + '</td><td>' + esc(a.connected) + '</td><td><code>' + esc(a.public_url) + '</code></td><td>' + (a.public_port || '-') + '</td><td>' + (a.approved ? 'approved' : 'pending') + '</td></tr>').join('') : '<tr><td colspan="7">No applications registered.</td></tr>';
+          appsBody.innerHTML = data.apps.length ? data.apps.map((a) => '<tr><td>' + esc(a.user_name) + '</td><td>' + esc(a.app_name) + '</td><td>' + esc(a.approved) + '</td><td>' + esc(a.connected) + '</td><td><code>' + esc(a.public_url) + '</code></td><td>' + (a.public_port || '-') + '</td><td>' + (a.approved ? 'approved' : 'pending') + '</td><td><strong>' + esc(a.effective_served_by_policy) + '</strong><br><span class="muted">override: ' + esc(a.served_by_override) + '</span>' + (a.served_by_override_reason ? '<br><span class="muted">reason: ' + esc(a.served_by_override_reason) + '</span>' : '') + '</td><td>' + overrideForm(a, data.served_by_app_override_options) + '</td></tr>').join('') : '<tr><td colspan="9">No applications registered.</td></tr>';
           status.textContent = 'Live updates: synced';
         };
         ws.onopen = () => { status.textContent = 'Live updates: connected'; };
@@ -3097,7 +3445,7 @@ const dashboardTemplates = `
 
     <h2>Applications</h2>
     <table>
-      <tr><th>App</th><th>Approved</th><th>Connected</th><th>Subdomain</th><th>Port</th><th>Status</th><th>Action</th></tr>
+      <tr><th>App</th><th>Approved</th><th>Connected</th><th>Subdomain</th><th>Port</th><th>Status</th><th>Served-by policy</th><th>Action</th></tr>
       <tbody id="user-apps-body">
       {{range .Apps}}
       <tr>
@@ -3107,10 +3455,11 @@ const dashboardTemplates = `
         <td><code>{{index . "public_url"}}</code></td>
         <td>{{with index . "public_port"}}{{.}}{{else}}-{{end}}</td>
         <td>{{index . "status"}}</td>
+        <td>{{index . "effective_served_by_policy"}} <span style="color:#666">(override: {{index . "served_by_override"}})</span></td>
         <td>{{if index . "can_approve"}}<form method="post" action="/api/me/approve"><input type="hidden" name="user" value="{{index . "user_name"}}"><input type="hidden" name="app" value="{{index . "app_name"}}"><button type="submit">Approve</button></form>{{else}}-{{end}}</td>
       </tr>
       {{else}}
-      <tr><td colspan="7">No applications registered yet.</td></tr>
+      <tr><td colspan="8">No applications registered yet.</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -3138,7 +3487,7 @@ const dashboardTemplates = `
           userAPIKey.textContent = data.user.api_key;
           labelInput.value = data.user.public_user_label;
           dashboardURL.textContent = 'https://' + data.user.public_user_label + '.' + data.base_domain;
-          appsBody.innerHTML = data.apps.length ? data.apps.map((a) => '<tr><td>' + esc(a.app_name) + '</td><td>' + esc(a.approved) + '</td><td>' + esc(a.connected) + '</td><td><code>' + esc(a.public_url) + '</code></td><td>' + (a.public_port || '-') + '</td><td>' + esc(a.status) + '</td><td>' + (a.can_approve ? '<form method="post" action="/api/me/approve"><input type="hidden" name="user" value="' + esc(a.user_name) + '"><input type="hidden" name="app" value="' + esc(a.app_name) + '"><button type="submit">Approve</button></form>' : '-') + '</td></tr>').join('') : '<tr><td colspan="7">No applications registered yet.</td></tr>';
+          appsBody.innerHTML = data.apps.length ? data.apps.map((a) => '<tr><td>' + esc(a.app_name) + '</td><td>' + esc(a.approved) + '</td><td>' + esc(a.connected) + '</td><td><code>' + esc(a.public_url) + '</code></td><td>' + (a.public_port || '-') + '</td><td>' + esc(a.status) + '</td><td>' + esc(a.effective_served_by_policy) + ' <span style="color:#666">(override: ' + esc(a.served_by_override) + ')</span></td><td>' + (a.can_approve ? '<form method="post" action="/api/me/approve"><input type="hidden" name="user" value="' + esc(a.user_name) + '"><input type="hidden" name="app" value="' + esc(a.app_name) + '"><button type="submit">Approve</button></form>' : '-') + '</td></tr>').join('') : '<tr><td colspan="8">No applications registered yet.</td></tr>';
           status.textContent = 'Live updates: synced';
         };
         ws.onopen = () => { status.textContent = 'Live updates: connected'; };
