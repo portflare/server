@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -398,11 +399,220 @@ func TestProxyToAppRecordsInvalidUpstreamBody(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	srv.proxyToApp(rr, req, "alice", "web")
-	if rr.Code != http.StatusOK {
-		t.Fatalf("response status is already written before invalid body is detected, got %d", rr.Code)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected bad gateway before upstream headers are written, got %d body=%s", rr.Code, rr.Body.String())
 	}
 	record := store.lastRecord(t)
 	if record.StatusCode != http.StatusBadGateway || !record.Failed {
+		t.Fatalf("unexpected traffic record: %#v", record)
+	}
+}
+
+func TestPrepareProxiedResponseInjectsEligibleHTMLGet(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://web-alice.example.test/page", nil)
+	upstreamBody := "<!doctype html><html><body><main>Hello</main></body></html>"
+	resp := TunnelResponse{
+		StatusCode: http.StatusOK,
+		Headers: http.Header{
+			"Content-Type":   []string{"text/html; charset=utf-8"},
+			"Content-Length": []string{strconv.Itoa(len(upstreamBody))},
+			"ETag":           []string{`"upstream"`},
+			"Last-Modified":  []string{"Wed, 21 Oct 2015 07:28:00 GMT"},
+			"X-Upstream":     []string{"ok"},
+		},
+		BodyBase64: base64.StdEncoding.EncodeToString([]byte(upstreamBody)),
+	}
+
+	prepared, err := prepareProxiedResponse(req, resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(prepared.body)
+	if prepared.decision != responseDecorationHTMLInject {
+		t.Fatalf("expected html injection decision, got %s", prepared.decision)
+	}
+	if !strings.Contains(body, "Served by Portflare") || strings.Index(body, "Served by Portflare") > strings.Index(strings.ToLower(body), "</body>") {
+		t.Fatalf("expected served-by markup before closing body, got %q", body)
+	}
+	if prepared.headers.Get("X-Upstream") != "ok" || prepared.headers.Get("X-Portflare-Served-By") != "Portflare" {
+		t.Fatalf("expected upstream and attribution headers, got %v", prepared.headers)
+	}
+	if got := prepared.headers.Get("Content-Length"); got != strconv.Itoa(len(prepared.body)) {
+		t.Fatalf("expected recalculated content length %d, got %q", len(prepared.body), got)
+	}
+	if prepared.headers.Get("ETag") != "" || prepared.headers.Get("Last-Modified") != "" {
+		t.Fatalf("expected stale validators removed, got %v", prepared.headers)
+	}
+}
+
+func TestPrepareProxiedResponseHeaderOnlyDecisionMatrix(t *testing.T) {
+	htmlBody := "<html><body>Hello</body></html>"
+	tests := []struct {
+		name       string
+		method     string
+		status     int
+		headers    http.Header
+		wantBody   string
+		wantNoBody bool
+	}{
+		{
+			name:     "post html",
+			method:   http.MethodPost,
+			status:   http.StatusOK,
+			headers:  http.Header{"Content-Type": []string{"text/html"}},
+			wantBody: htmlBody,
+		},
+		{
+			name:       "head html",
+			method:     http.MethodHead,
+			status:     http.StatusOK,
+			headers:    http.Header{"Content-Type": []string{"text/html"}},
+			wantNoBody: true,
+		},
+		{
+			name:     "redirect",
+			method:   http.MethodGet,
+			status:   http.StatusFound,
+			headers:  http.Header{"Content-Type": []string{"text/html"}, "Location": []string{"/next"}},
+			wantBody: htmlBody,
+		},
+		{
+			name:       "no content",
+			method:     http.MethodGet,
+			status:     http.StatusNoContent,
+			headers:    http.Header{"Content-Type": []string{"text/html"}},
+			wantNoBody: true,
+		},
+		{
+			name:       "not modified",
+			method:     http.MethodGet,
+			status:     http.StatusNotModified,
+			headers:    http.Header{"Content-Type": []string{"text/html"}},
+			wantNoBody: true,
+		},
+		{
+			name:     "json",
+			method:   http.MethodGet,
+			status:   http.StatusOK,
+			headers:  http.Header{"Content-Type": []string{"application/json"}},
+			wantBody: htmlBody,
+		},
+		{
+			name:     "attachment",
+			method:   http.MethodGet,
+			status:   http.StatusOK,
+			headers:  http.Header{"Content-Type": []string{"text/html"}, "Content-Disposition": []string{`attachment; filename="index.html"`}},
+			wantBody: htmlBody,
+		},
+		{
+			name:     "encoded html",
+			method:   http.MethodGet,
+			status:   http.StatusOK,
+			headers:  http.Header{"Content-Type": []string{"text/html"}, "Content-Encoding": []string{"gzip"}},
+			wantBody: htmlBody,
+		},
+		{
+			name:     "missing content type",
+			method:   http.MethodGet,
+			status:   http.StatusOK,
+			headers:  http.Header{},
+			wantBody: htmlBody,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "https://web-alice.example.test/page", nil)
+			resp := TunnelResponse{
+				StatusCode: tt.status,
+				Headers:    tt.headers,
+				BodyBase64: base64.StdEncoding.EncodeToString([]byte(htmlBody)),
+			}
+			prepared, err := prepareProxiedResponse(req, resp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prepared.decision != responseDecorationHeaderOnly {
+				t.Fatalf("expected header-only decision, got %s", prepared.decision)
+			}
+			if prepared.headers.Get("X-Portflare-Served-By") != "Portflare" {
+				t.Fatalf("expected attribution header, got %v", prepared.headers)
+			}
+			if strings.Contains(string(prepared.body), "Served by Portflare") {
+				t.Fatalf("did not expect visible injection in %q body %q", tt.name, string(prepared.body))
+			}
+			if tt.wantNoBody {
+				if len(prepared.body) != 0 {
+					t.Fatalf("expected no response body, got %q", string(prepared.body))
+				}
+				if prepared.headers.Get("Content-Length") != "" {
+					t.Fatalf("expected no content length for bodyless response, got %v", prepared.headers)
+				}
+				return
+			}
+			if string(prepared.body) != tt.wantBody {
+				t.Fatalf("expected body %q, got %q", tt.wantBody, string(prepared.body))
+			}
+		})
+	}
+}
+
+func TestPrepareProxiedResponseSkipsUpgrades(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://web-alice.example.test/socket", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	resp := TunnelResponse{
+		StatusCode: http.StatusSwitchingProtocols,
+		Headers:    http.Header{"Connection": []string{"Upgrade"}, "Upgrade": []string{"websocket"}},
+		BodyBase64: base64.StdEncoding.EncodeToString(nil),
+	}
+
+	prepared, err := prepareProxiedResponse(req, resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.decision != responseDecorationSkip {
+		t.Fatalf("expected skip decision, got %s", prepared.decision)
+	}
+	if prepared.headers.Get("X-Portflare-Served-By") != "" {
+		t.Fatalf("did not expect attribution headers for upgrade, got %v", prepared.headers)
+	}
+}
+
+func TestProxyToAppWritesInjectedResponseAfterClassification(t *testing.T) {
+	store := &captureTrafficStore{}
+	srv, cleanup := newProxyTestServer(t, store, func(req TunnelRequest) TunnelResponse {
+		body := "<html><body><h1>Hello</h1></body></html>"
+		return TunnelResponse{
+			RequestID:  req.RequestID,
+			StatusCode: http.StatusOK,
+			Headers: http.Header{
+				"Content-Type":   []string{"text/html"},
+				"Content-Length": []string{strconv.Itoa(len(body))},
+				"ETag":           []string{`"old"`},
+			},
+			BodyBase64: base64.StdEncoding.EncodeToString([]byte(body)),
+		}
+	})
+	defer cleanup()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	srv.proxyToApp(rr, req, "alice", "web")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Served by Portflare") {
+		t.Fatalf("expected injected served-by markup, got %q", rr.Body.String())
+	}
+	if rr.Header().Get("ETag") != "" {
+		t.Fatalf("expected stale etag removed, got %v", rr.Header())
+	}
+	if got := rr.Header().Get("Content-Length"); got != strconv.Itoa(rr.Body.Len()) {
+		t.Fatalf("expected recalculated content length %d, got %q", rr.Body.Len(), got)
+	}
+	record := store.lastRecord(t)
+	if record.StatusCode != http.StatusOK || record.Failed || record.BytesOut != int64(rr.Body.Len()) {
 		t.Fatalf("unexpected traffic record: %#v", record)
 	}
 }

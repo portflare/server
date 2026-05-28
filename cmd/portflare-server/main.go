@@ -1290,6 +1290,197 @@ func (s *Server) recordTraffic(userName, appName string, statusCode int, bytesIn
 	})
 }
 
+type responseDecorationDecision string
+
+const (
+	responseDecorationHTMLInject responseDecorationDecision = "html_inject"
+	responseDecorationHeaderOnly responseDecorationDecision = "header_only"
+	responseDecorationSkip       responseDecorationDecision = "skip"
+
+	servedByHeaderName  = "X-Portflare-Served-By"
+	servedByHeaderValue = "Portflare"
+)
+
+func (d responseDecorationDecision) String() string {
+	return string(d)
+}
+
+type preparedProxiedResponse struct {
+	status   int
+	headers  http.Header
+	body     []byte
+	decision responseDecorationDecision
+}
+
+func prepareProxiedResponse(r *http.Request, resp TunnelResponse) (preparedProxiedResponse, error) {
+	status := resp.StatusCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	payload, err := base64.StdEncoding.DecodeString(resp.BodyBase64)
+	if err != nil {
+		return preparedProxiedResponse{}, err
+	}
+
+	decision := classifyProxiedResponse(r, status, resp.Headers, payload)
+	headers := filteredProxiedResponseHeaders(resp.Headers)
+	body := payload
+	payloadChanged := false
+
+	if decision == responseDecorationHTMLInject {
+		body = injectServedByMarkup(payload)
+		payloadChanged = true
+	}
+	if !responseCanHaveBody(r.Method, status) {
+		body = nil
+	}
+	if payloadChanged {
+		removeStalePayloadHeaders(headers)
+	}
+	if decision != responseDecorationSkip {
+		headers.Set(servedByHeaderName, servedByHeaderValue)
+	}
+	if responseCanHaveBody(r.Method, status) {
+		headers.Set("Content-Length", strconv.Itoa(len(body)))
+	} else {
+		headers.Del("Content-Length")
+	}
+
+	return preparedProxiedResponse{
+		status:   status,
+		headers:  headers,
+		body:     body,
+		decision: decision,
+	}, nil
+}
+
+func classifyProxiedResponse(r *http.Request, status int, headers http.Header, payload []byte) responseDecorationDecision {
+	if isUpgradeRequest(r) || isUpgradeResponse(status, headers) {
+		return responseDecorationSkip
+	}
+	if !responseCanHaveBody(r.Method, status) {
+		return responseDecorationHeaderOnly
+	}
+	if r.Method != http.MethodGet {
+		return responseDecorationHeaderOnly
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return responseDecorationHeaderOnly
+	}
+	if isAttachment(headers.Get("Content-Disposition")) {
+		return responseDecorationHeaderOnly
+	}
+	if hasUnsafeContentEncoding(headers.Get("Content-Encoding")) {
+		return responseDecorationHeaderOnly
+	}
+	if !isHTMLContentType(headers.Get("Content-Type")) {
+		return responseDecorationHeaderOnly
+	}
+	if len(payload) == 0 {
+		return responseDecorationHeaderOnly
+	}
+	return responseDecorationHTMLInject
+}
+
+func responseCanHaveBody(method string, status int) bool {
+	if method == http.MethodHead {
+		return false
+	}
+	if status >= 100 && status < 200 {
+		return false
+	}
+	return status != http.StatusNoContent && status != http.StatusNotModified
+}
+
+func filteredProxiedResponseHeaders(src http.Header) http.Header {
+	dst := make(http.Header, len(src))
+	for k, values := range src {
+		if shouldDropProxiedResponseHeader(k) {
+			continue
+		}
+		for _, v := range values {
+			dst.Add(k, v)
+		}
+	}
+	return dst
+}
+
+func shouldDropProxiedResponseHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "connection", "content-length", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
+}
+
+func removeStalePayloadHeaders(headers http.Header) {
+	headers.Del("Content-MD5")
+	headers.Del("Digest")
+	headers.Del("ETag")
+	headers.Del("Last-Modified")
+}
+
+func isUpgradeRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	return headerTokenContains(r.Header, "Connection", "upgrade") || r.Header.Get("Upgrade") != ""
+}
+
+func isUpgradeResponse(status int, headers http.Header) bool {
+	return status == http.StatusSwitchingProtocols || headerTokenContains(headers, "Connection", "upgrade") || headers.Get("Upgrade") != ""
+}
+
+func headerTokenContains(headers http.Header, name, token string) bool {
+	for _, value := range headers.Values(name) {
+		for _, part := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), token) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isAttachment(contentDisposition string) bool {
+	if contentDisposition == "" {
+		return false
+	}
+	parts := strings.SplitN(contentDisposition, ";", 2)
+	return strings.EqualFold(strings.TrimSpace(parts[0]), "attachment")
+}
+
+func hasUnsafeContentEncoding(contentEncoding string) bool {
+	if contentEncoding == "" {
+		return false
+	}
+	for _, value := range strings.Split(contentEncoding, ",") {
+		if !strings.EqualFold(strings.TrimSpace(value), "identity") {
+			return true
+		}
+	}
+	return false
+}
+
+func isHTMLContentType(contentType string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
+}
+
+func injectServedByMarkup(payload []byte) []byte {
+	const markup = `<div data-portflare-served-by="true" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;padding:8px 10px;border:1px solid #9ca3af;background:#ffffff;color:#111827;font:13px/1.4 sans-serif">Served by Portflare</div>`
+	body := string(payload)
+	lower := strings.ToLower(body)
+	if idx := strings.LastIndex(lower, "</body>"); idx >= 0 {
+		return []byte(body[:idx] + markup + body[idx:])
+	}
+	if idx := strings.LastIndex(lower, "</html>"); idx >= 0 {
+		return []byte(body[:idx] + markup + body[idx:])
+	}
+	return []byte(body + markup)
+}
+
 func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, appName string) {
 	started := time.Now()
 
@@ -1363,27 +1554,23 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 			writeError(w, http.StatusBadGateway, resp.Error)
 			return
 		}
-		for k, values := range resp.Headers {
-			if strings.EqualFold(k, "content-length") || strings.EqualFold(k, "connection") || strings.EqualFold(k, "transfer-encoding") {
-				continue
-			}
-			for _, v := range values {
-				w.Header().Add(k, v)
-			}
-		}
-		status := resp.StatusCode
-		if status == 0 {
-			status = http.StatusOK
-		}
-		w.WriteHeader(status)
-		payload, err := base64.StdEncoding.DecodeString(resp.BodyBase64)
+		prepared, err := prepareProxiedResponse(r, resp)
 		if err != nil {
 			s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
 			writeError(w, http.StatusBadGateway, "invalid upstream response")
 			return
 		}
-		written, _ := w.Write(payload)
-		s.recordTraffic(userName, appName, status, bytesIn, int64(written), time.Since(started), status >= 500)
+		for k, values := range prepared.headers {
+			for _, v := range values {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(prepared.status)
+		written := 0
+		if len(prepared.body) > 0 {
+			written, _ = w.Write(prepared.body)
+		}
+		s.recordTraffic(userName, appName, prepared.status, bytesIn, int64(written), time.Since(started), prepared.status >= 500)
 	case <-ctx.Done():
 		s.pendingMu.Lock()
 		delete(s.pending, requestID)
