@@ -1297,8 +1297,15 @@ const (
 	responseDecorationHeaderOnly responseDecorationDecision = "header_only"
 	responseDecorationSkip       responseDecorationDecision = "skip"
 
-	servedByHeaderName  = "X-Portflare-Served-By"
-	servedByHeaderValue = "Portflare"
+	learnMorePath = "/about-portflare"
+	reportPath    = "/report-abuse"
+
+	servedByHeaderName    = "X-Portflare-Served-By"
+	servedByHeaderValue   = "Portflare"
+	learnMoreHeaderName   = "X-Portflare-Learn-More"
+	reportAbuseHeaderName = "X-Portflare-Report-Abuse"
+	appHeaderName         = "X-Portflare-App"
+	userHeaderName        = "X-Portflare-User"
 )
 
 func (d responseDecorationDecision) String() string {
@@ -1481,14 +1488,67 @@ func injectServedByMarkup(payload []byte) []byte {
 	return []byte(body + markup)
 }
 
+func (s *Server) addPortflareFallbackHeaders(headers http.Header, r *http.Request, appName, publicUserLabel string) {
+	if isUpgradeRequest(r) {
+		return
+	}
+	serviceBaseURL := s.publicServiceBaseURL(r)
+	learnMoreURL := serviceBaseURL + learnMorePath
+	reportURL := serviceBaseURL + reportPath + "?url=" + neturl.QueryEscape(publicRequestURL(r))
+
+	headers.Set(servedByHeaderName, servedByHeaderValue)
+	headers.Set(learnMoreHeaderName, learnMoreURL)
+	headers.Set(reportAbuseHeaderName, reportURL)
+	if appName = slug(appName); appName != "" {
+		headers.Set(appHeaderName, appName)
+	}
+	if isSafePublicUserLabel(publicUserLabel) {
+		headers.Set(userHeaderName, publicUserLabel)
+	}
+	headers.Add("Link", fmt.Sprintf("<%s>; rel=\"learn-more\"", learnMoreURL))
+	headers.Add("Link", fmt.Sprintf("<%s>; rel=\"report-abuse\"", reportURL))
+}
+
+func (s *Server) publicServiceBaseURL(r *http.Request) string {
+	host := canonicalHost(s.cfg.PublicBaseDomain)
+	if host == "" && r != nil {
+		host = canonicalHost(r.Host)
+	}
+	return requestScheme(r) + "://" + host
+}
+
+func publicRequestURL(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	target := *r.URL
+	target.Scheme = requestScheme(r)
+	if r.Host != "" {
+		target.Host = r.Host
+	}
+	return target.String()
+}
+
+func isSafePublicUserLabel(label string) bool {
+	if label == "" {
+		return false
+	}
+	return userLabel(label) == label
+}
+
 func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, appName string) {
 	started := time.Now()
 
 	s.stateMu.RLock()
 	app, ok := s.state.Apps[appKey(userName, appName)]
+	publicUserLabel := ""
+	if user, userOK := s.state.Users[userName]; userOK {
+		publicUserLabel = user.PublicUserLabel
+	}
 	s.stateMu.RUnlock()
 	if !ok || !app.Approved {
 		s.recordTraffic(userName, appName, http.StatusNotFound, 0, 0, time.Since(started), true)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
 		writeError(w, http.StatusNotFound, "app is not available")
 		return
 	}
@@ -1498,11 +1558,13 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 	s.clientsMu.RUnlock()
 	if client == nil {
 		s.recordTraffic(userName, appName, http.StatusBadGateway, 0, 0, time.Since(started), true)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
 		writeError(w, http.StatusBadGateway, "client is offline")
 		return
 	}
 	if _, ok := client.apps[appName]; !ok {
 		s.recordTraffic(userName, appName, http.StatusBadGateway, 0, 0, time.Since(started), true)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
 		writeError(w, http.StatusBadGateway, "app is not connected")
 		return
 	}
@@ -1510,6 +1572,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 	body, err := io.ReadAll(io.LimitReader(r.Body, s.cfg.MaxBodyBytes))
 	if err != nil {
 		s.recordTraffic(userName, appName, http.StatusBadRequest, 0, 0, time.Since(started), true)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1540,6 +1603,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 		delete(s.pending, requestID)
 		s.pendingMu.Unlock()
 		s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -1551,14 +1615,19 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 	case resp := <-pending.ch:
 		if resp.Error != "" {
 			s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
+			s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
 			writeError(w, http.StatusBadGateway, resp.Error)
 			return
 		}
 		prepared, err := prepareProxiedResponse(r, resp)
 		if err != nil {
 			s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
+			s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
 			writeError(w, http.StatusBadGateway, "invalid upstream response")
 			return
+		}
+		if prepared.decision != responseDecorationSkip {
+			s.addPortflareFallbackHeaders(prepared.headers, r, appName, publicUserLabel)
 		}
 		for k, values := range prepared.headers {
 			for _, v := range values {
@@ -1576,6 +1645,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 		delete(s.pending, requestID)
 		s.pendingMu.Unlock()
 		s.recordTraffic(userName, appName, http.StatusGatewayTimeout, bytesIn, 0, time.Since(started), true)
+		s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
 		writeError(w, http.StatusGatewayTimeout, "upstream request timed out")
 	}
 }

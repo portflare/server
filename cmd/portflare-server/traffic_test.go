@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -395,16 +396,94 @@ func TestProxyToAppRecordsInvalidUpstreamBody(t *testing.T) {
 		return TunnelResponse{RequestID: req.RequestID, StatusCode: http.StatusOK, BodyBase64: "not base64"}
 	})
 	defer cleanup()
+	srv.state.Users["alice"] = &User{UserName: "alice", PublicUserLabel: "alicesmith", Email: "alice@example.test"}
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://web-alicesmith.reverse.example.test/broken?next=%2Fdashboard", nil)
 	srv.proxyToApp(rr, req, "alice", "web")
 	if rr.Code != http.StatusBadGateway {
 		t.Fatalf("expected bad gateway before upstream headers are written, got %d body=%s", rr.Code, rr.Body.String())
 	}
+	assertPortflareFallbackHeaders(t, rr.Header(), req.URL.String(), "web", "alicesmith")
 	record := store.lastRecord(t)
 	if record.StatusCode != http.StatusBadGateway || !record.Failed {
 		t.Fatalf("unexpected traffic record: %#v", record)
+	}
+}
+
+func TestProxyToAppAppendsFallbackHeadersToJSON(t *testing.T) {
+	store := &captureTrafficStore{}
+	srv, cleanup := newProxyTestServer(t, store, func(req TunnelRequest) TunnelResponse {
+		body := `{"ok":true}`
+		return TunnelResponse{
+			RequestID:  req.RequestID,
+			StatusCode: http.StatusOK,
+			Headers: http.Header{
+				"Content-Type": []string{"application/json"},
+				"Link":         []string{`<https://upstream.example.test/schema>; rel="describedby"`},
+			},
+			BodyBase64: base64.StdEncoding.EncodeToString([]byte(body)),
+		}
+	})
+	defer cleanup()
+	srv.state.Users["alice"] = &User{UserName: "alice", PublicUserLabel: "alicesmith", Email: "alice@example.test"}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "https://web-alicesmith.reverse.example.test/api?next=%2Fdashboard&term=hello+world", nil)
+	srv.proxyToApp(rr, req, "alice", "web")
+	if rr.Code != http.StatusOK || rr.Body.String() != `{"ok":true}` {
+		t.Fatalf("unexpected response: status=%d body=%q", rr.Code, rr.Body.String())
+	}
+	assertPortflareFallbackHeaders(t, rr.Header(), req.URL.String(), "web", "alicesmith")
+	assertHeaderValuesContain(t, rr.Header().Values("Link"), `<https://upstream.example.test/schema>; rel="describedby"`)
+}
+
+func TestProxyToAppAddsFallbackHeadersToImagesAndRedirects(t *testing.T) {
+	tests := []struct {
+		name   string
+		url    string
+		status int
+		header http.Header
+		body   []byte
+	}{
+		{
+			name:   "image",
+			url:    "https://web-alicesmith.reverse.example.test/logo.png",
+			status: http.StatusOK,
+			header: http.Header{"Content-Type": []string{"image/png"}},
+			body:   []byte{0x89, 'P', 'N', 'G'},
+		},
+		{
+			name:   "redirect",
+			url:    "https://web-alicesmith.reverse.example.test/start",
+			status: http.StatusFound,
+			header: http.Header{"Location": []string{"/next"}},
+			body:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &captureTrafficStore{}
+			srv, cleanup := newProxyTestServer(t, store, func(req TunnelRequest) TunnelResponse {
+				return TunnelResponse{
+					RequestID:  req.RequestID,
+					StatusCode: tt.status,
+					Headers:    tt.header,
+					BodyBase64: base64.StdEncoding.EncodeToString(tt.body),
+				}
+			})
+			defer cleanup()
+			srv.state.Users["alice"] = &User{UserName: "alice", PublicUserLabel: "alicesmith", Email: "alice@example.test"}
+
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			srv.proxyToApp(rr, req, "alice", "web")
+			if rr.Code != tt.status {
+				t.Fatalf("unexpected status: got %d want %d body=%q", rr.Code, tt.status, rr.Body.String())
+			}
+			assertPortflareFallbackHeaders(t, rr.Header(), req.URL.String(), "web", "alicesmith")
+		})
 	}
 }
 
@@ -595,9 +674,10 @@ func TestProxyToAppWritesInjectedResponseAfterClassification(t *testing.T) {
 		}
 	})
 	defer cleanup()
+	srv.state.Users["alice"] = &User{UserName: "alice", PublicUserLabel: "alicesmith", Email: "alice@example.test"}
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://web-alicesmith.reverse.example.test/", nil)
 	srv.proxyToApp(rr, req, "alice", "web")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d body=%s", rr.Code, rr.Body.String())
@@ -608,6 +688,7 @@ func TestProxyToAppWritesInjectedResponseAfterClassification(t *testing.T) {
 	if rr.Header().Get("ETag") != "" {
 		t.Fatalf("expected stale etag removed, got %v", rr.Header())
 	}
+	assertPortflareFallbackHeaders(t, rr.Header(), req.URL.String(), "web", "alicesmith")
 	if got := rr.Header().Get("Content-Length"); got != strconv.Itoa(rr.Body.Len()) {
 		t.Fatalf("expected recalculated content length %d, got %q", rr.Body.Len(), got)
 	}
@@ -615,6 +696,59 @@ func TestProxyToAppWritesInjectedResponseAfterClassification(t *testing.T) {
 	if record.StatusCode != http.StatusOK || record.Failed || record.BytesOut != int64(rr.Body.Len()) {
 		t.Fatalf("unexpected traffic record: %#v", record)
 	}
+}
+
+func assertPortflareFallbackHeaders(t *testing.T, headers http.Header, currentURL, appName, publicUserLabel string) {
+	t.Helper()
+	if headers.Get("X-Portflare-Served-By") != "Portflare" {
+		t.Fatalf("expected Portflare served-by header, got %v", headers)
+	}
+	if headers.Get("X-Portflare-App") != appName {
+		t.Fatalf("expected public app header %q, got %q headers=%v", appName, headers.Get("X-Portflare-App"), headers)
+	}
+	if publicUserLabel != "" && headers.Get("X-Portflare-User") != publicUserLabel {
+		t.Fatalf("expected public user label header %q, got %q headers=%v", publicUserLabel, headers.Get("X-Portflare-User"), headers)
+	}
+	if strings.Contains(strings.Join(headers.Values("X-Portflare-User"), ","), "alice-smith") || strings.Contains(strings.Join(headers.Values("X-Portflare-User"), ","), "alice@example.test") {
+		t.Fatalf("fallback headers exposed internal user data: %v", headers)
+	}
+
+	learnMoreURL := headers.Get("X-Portflare-Learn-More")
+	if learnMoreURL != "https://reverse.example.test/about-portflare" {
+		t.Fatalf("unexpected learn-more URL %q", learnMoreURL)
+	}
+	reportURL := headers.Get("X-Portflare-Report-Abuse")
+	if reportURL == "" {
+		t.Fatalf("expected report-abuse header, got %v", headers)
+	}
+	parsedReportURL, err := neturl.Parse(reportURL)
+	if err != nil {
+		t.Fatalf("parse report URL: %v", err)
+	}
+	if parsedReportURL.Scheme != "https" || parsedReportURL.Host != "reverse.example.test" || parsedReportURL.Path != "/report-abuse" {
+		t.Fatalf("unexpected report URL target %q", reportURL)
+	}
+	if got := parsedReportURL.Query().Get("url"); got != currentURL {
+		t.Fatalf("expected report URL to encode current URL %q, got %q in %q", currentURL, got, reportURL)
+	}
+	if strings.Contains(reportURL, currentURL) || !strings.Contains(reportURL, neturl.QueryEscape(currentURL)) {
+		t.Fatalf("report URL did not safely encode current URL: %q", reportURL)
+	}
+
+	assertHeaderValuesContain(t, headers.Values("Link"), `<https://reverse.example.test/about-portflare>; rel="learn-more"`)
+	assertHeaderValuesContain(t, headers.Values("Link"), `<`+reportURL+`>; rel="report-abuse"`)
+}
+
+func assertHeaderValuesContain(t *testing.T, values []string, want string) {
+	t.Helper()
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			if strings.TrimSpace(part) == want {
+				return
+			}
+		}
+	}
+	t.Fatalf("expected header values %v to contain %q", values, want)
 }
 
 func newProxyTestServer(t *testing.T, store TrafficStore, respond func(TunnelRequest) TunnelResponse) (*Server, func()) {
@@ -639,10 +773,13 @@ func newProxyTestServer(t *testing.T, store TrafficStore, respond func(TunnelReq
 	serverConn := <-ready
 
 	srv := &Server{
-		cfg: Config{MaxBodyBytes: 1024, RequestTimeout: time.Second},
-		state: State{Apps: map[string]*App{
-			"alice/web": {UserName: "alice", AppName: "web", Approved: true},
-		}},
+		cfg: Config{PublicBaseDomain: "reverse.example.test", MaxBodyBytes: 1024, RequestTimeout: time.Second},
+		state: State{
+			Users: map[string]*User{},
+			Apps: map[string]*App{
+				"alice/web": {UserName: "alice", AppName: "web", Approved: true},
+			},
+		},
 		clients: map[string]*TunnelClient{
 			"alice": {conn: clientConn, apps: map[string]*ConnectedApp{"web": {appName: "web"}}},
 		},
