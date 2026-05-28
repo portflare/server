@@ -48,6 +48,8 @@ The settings are copied into the state file on first run, displayed in `/admin` 
 
 The public abuse report endpoint rate-limits reports by reporter IP, reported URL, reported host, route context, and a hash of the reporter contact email when one is supplied. Duplicate reports for the same URL are coalesced into the original case while preserving reporter count and category-count signals for triage. The HTML form includes honeypot and time-to-submit fields; API clients can omit the timing field.
 
+The injected served-by component is static HTML with no inline JavaScript, no inline CSS, and no external assets. Upstream CSP is preserved by default; responses that are unsafe to mutate fall back to served-by/report headers rather than weakening the tenant app policy. See [docs/served-by-security.md](docs/served-by-security.md) for the CSP, privacy, retention, XSS, clickjacking, and tenant-CSS risk review.
+
 Operators can require an external challenge hook for the report endpoint with:
 
 ```bash

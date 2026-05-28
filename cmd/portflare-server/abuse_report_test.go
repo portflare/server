@@ -59,6 +59,8 @@ func TestReportAbuseFormPrefillsReportedURLAndContext(t *testing.T) {
 		`name="context"`,
 		"served-by banner",
 		"Portflare routes traffic for independently operated apps",
+		"Portflare stores only the report details needed to investigate abuse",
+		"Routine report records should be retained only for the operator's abuse-response window",
 		"Do not submit passwords, API keys, private tokens, or other secrets",
 	} {
 		if !strings.Contains(body, want) {
@@ -137,6 +139,54 @@ func TestReportAbuseJSONPersistsReportAndReturnsSafeCaseID(t *testing.T) {
 	}
 	if reloaded.state.AbuseReports[caseID] == nil {
 		t.Fatalf("expected report %q after reload, got %#v", caseID, reloaded.state.AbuseReports)
+	}
+}
+
+func TestReportAbuseRecordDoesNotStoreUnnecessaryRequestData(t *testing.T) {
+	srv := newAbuseReportTestServer(t)
+	raw, err := json.Marshal(map[string]string{
+		"reported_url": "https://web-alicesmith.reverse.example.test/bad",
+		"category":     "phishing",
+		"description":  "Credential collection.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://reverse.example.test/api/report-abuse?utm=tracking", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cookie", "session=secret-cookie")
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Referer", "https://external.example.test/private")
+	req.Header.Set("Accept-Language", "en-US")
+	req.Header.Set("X-Forwarded-For", "203.0.113.8")
+	rr := httptest.NewRecorder()
+
+	srv.routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("unexpected status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	report := srv.state.AbuseReports[resp["case_id"]]
+	rawReport, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowerReport := strings.ToLower(string(rawReport))
+	for _, forbidden := range []string{
+		"secret-cookie",
+		"secret-token",
+		"authorization",
+		"referer",
+		"accept-language",
+		"external.example.test/private",
+		"utm=tracking",
+	} {
+		if strings.Contains(lowerReport, strings.ToLower(forbidden)) {
+			t.Fatalf("report stored unnecessary request data %q: %s", forbidden, rawReport)
+		}
 	}
 }
 

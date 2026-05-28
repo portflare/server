@@ -3277,11 +3277,11 @@ func injectServedByMarkup(payload []byte, affordance servedByAffordance) []byte 
 func servedByMarkup(affordance servedByAffordance) string {
 	learnMoreURL := html.EscapeString(affordance.LearnMoreURL)
 	reportAbuseURL := html.EscapeString(affordance.ReportAbuseURL)
-	markup := `<aside data-portflare-served-by="true" role="complementary" aria-label="Portflare service notice" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;gap:8px;align-items:center;max-width:min(92vw,360px);padding:8px 10px;border:1px solid #9ca3af;background:#ffffff;color:#111827;font:13px/1.4 sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.16)">` +
+	markup := `<aside data-portflare-served-by="true" class="portflare-served-by" role="complementary" aria-label="Portflare service notice">` +
 		`<span>Served by Portflare</span>` +
-		`<a href="` + learnMoreURL + `" style="color:#1d4ed8;text-decoration:underline">Learn more</a>`
+		`<a class="portflare-served-by__link" href="` + learnMoreURL + `">Learn more</a>`
 	if reportAbuseURL != "" {
-		markup += `<a href="` + reportAbuseURL + `" style="color:#b91c1c;text-decoration:underline">Report abuse</a>`
+		markup += `<a class="portflare-served-by__link" href="` + reportAbuseURL + `">Report abuse</a>`
 	}
 	return markup + `</aside>`
 }
@@ -4004,6 +4004,8 @@ const dashboardTemplates = `
   <body>
     <h1>Report abuse</h1>
     <p>Portflare routes traffic for independently operated apps. Reports may be shared with the site operator as needed to investigate abuse.</p>
+    <p>Portflare stores only the report details needed to investigate abuse: the reported URL, category, description, optional reporter contact, route context, requester IP address, user agent, and timestamps.</p>
+    <p class="muted">Routine report records should be retained only for the operator's abuse-response window, with IP and user-agent metadata truncated or deleted after 180 days unless a legal hold or safety obligation requires longer retention.</p>
     <p class="muted">Do not submit passwords, API keys, private tokens, or other secrets. If there is imminent danger, contact local emergency services.</p>
     <form method="post" action="/api/report-abuse">
       <label>Reported URL

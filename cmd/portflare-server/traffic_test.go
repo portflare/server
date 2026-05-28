@@ -611,6 +611,50 @@ func TestPrepareProxiedResponseInjectsEligibleHTMLGet(t *testing.T) {
 	}
 }
 
+func TestPrepareProxiedResponsePreservesStrictCSPAndAvoidsExecutableOrAssetMarkup(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://web-alice.example.test/page", nil)
+	const strictCSP = "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; frame-ancestors 'none'"
+	resp := TunnelResponse{
+		StatusCode: http.StatusOK,
+		Headers: http.Header{
+			"Content-Type":            []string{"text/html; charset=utf-8"},
+			"Content-Security-Policy": []string{strictCSP},
+		},
+		BodyBase64: base64.StdEncoding.EncodeToString([]byte("<!doctype html><html><body><main>Hello</main></body></html>")),
+	}
+
+	prepared, err := prepareProxiedResponse(req, resp, testServedByAffordance())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.ToLower(string(prepared.body))
+	if got := prepared.headers.Get("Content-Security-Policy"); got != strictCSP {
+		t.Fatalf("strict upstream CSP should be preserved exactly, got %q", got)
+	}
+	if prepared.decision != responseDecorationHTMLInject || !strings.Contains(body, "served by portflare") {
+		t.Fatalf("expected strict-CSP-safe visible markup, decision=%s body=%q", prepared.decision, body)
+	}
+	for _, forbidden := range []string{
+		"<script",
+		"javascript:",
+		" style=",
+		" onclick=",
+		" onload=",
+		" onerror=",
+		"<link",
+		"<img",
+		"<iframe",
+		"<object",
+		"<embed",
+		"<form",
+		"<input",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("injected markup must not include %q under strict CSP: %q", forbidden, body)
+		}
+	}
+}
+
 func TestInjectServedByMarkupHandlesHTMLTagVariantsAndFallback(t *testing.T) {
 	affordance := servedByAffordance{
 		LearnMoreURL:   "https://reverse.example.test/about-portflare",
