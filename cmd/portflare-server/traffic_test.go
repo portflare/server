@@ -487,6 +487,77 @@ func TestProxyToAppAddsFallbackHeadersToImagesAndRedirects(t *testing.T) {
 	}
 }
 
+func TestProxyToAppAddsFallbackHeadersToErrorFallbacks(t *testing.T) {
+	tests := []struct {
+		name   string
+		want   int
+		server func(*captureTrafficStore) (*Server, func())
+	}{
+		{
+			name: "app unavailable",
+			want: http.StatusNotFound,
+			server: func(store *captureTrafficStore) (*Server, func()) {
+				return &Server{
+					cfg:     Config{PublicBaseDomain: "reverse.example.test"},
+					state:   State{Users: map[string]*User{"alice": {UserName: "alice", PublicUserLabel: "alicesmith", Email: "alice@example.test"}}, Apps: map[string]*App{}},
+					traffic: store,
+				}, func() {}
+			},
+		},
+		{
+			name: "client offline",
+			want: http.StatusBadGateway,
+			server: func(store *captureTrafficStore) (*Server, func()) {
+				return &Server{
+					cfg:     Config{PublicBaseDomain: "reverse.example.test"},
+					state:   State{Users: map[string]*User{"alice": {UserName: "alice", PublicUserLabel: "alicesmith", Email: "alice@example.test"}}, Apps: map[string]*App{"alice/web": {UserName: "alice", AppName: "web", Approved: true}}},
+					clients: map[string]*TunnelClient{},
+					traffic: store,
+				}, func() {}
+			},
+		},
+		{
+			name: "app not connected",
+			want: http.StatusBadGateway,
+			server: func(store *captureTrafficStore) (*Server, func()) {
+				return &Server{
+					cfg:     Config{PublicBaseDomain: "reverse.example.test"},
+					state:   State{Users: map[string]*User{"alice": {UserName: "alice", PublicUserLabel: "alicesmith", Email: "alice@example.test"}}, Apps: map[string]*App{"alice/web": {UserName: "alice", AppName: "web", Approved: true}}},
+					clients: map[string]*TunnelClient{"alice": {apps: map[string]*ConnectedApp{}}},
+					traffic: store,
+				}, func() {}
+			},
+		},
+		{
+			name: "upstream error",
+			want: http.StatusBadGateway,
+			server: func(store *captureTrafficStore) (*Server, func()) {
+				srv, cleanup := newProxyTestServer(t, store, func(req TunnelRequest) TunnelResponse {
+					return TunnelResponse{RequestID: req.RequestID, Error: "upstream failed"}
+				})
+				srv.state.Users["alice"] = &User{UserName: "alice", PublicUserLabel: "alicesmith", Email: "alice@example.test"}
+				return srv, cleanup
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &captureTrafficStore{}
+			srv, cleanup := tt.server(store)
+			defer cleanup()
+			req := httptest.NewRequest(http.MethodGet, "https://web-alicesmith.reverse.example.test/fallback?next=%2Fdashboard", nil)
+
+			rr := httptest.NewRecorder()
+			srv.proxyToApp(rr, req, "alice", "web")
+			if rr.Code != tt.want {
+				t.Fatalf("unexpected status: got %d want %d body=%q", rr.Code, tt.want, rr.Body.String())
+			}
+			assertPortflareFallbackHeaders(t, rr.Header(), req.URL.String(), "web", "alicesmith")
+		})
+	}
+}
+
 func TestPrepareProxiedResponseInjectsEligibleHTMLGet(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://web-alice.example.test/page", nil)
 	upstreamBody := "<!doctype html><html><body><main>Hello</main></body></html>"
