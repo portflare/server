@@ -9,8 +9,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newAbuseReportTestServer(t *testing.T) *Server {
@@ -244,7 +246,7 @@ func TestReportAbuseRejectsOversizedBody(t *testing.T) {
 	}
 }
 
-func TestReportAbuseThrottlesPerIPAndReportedURL(t *testing.T) {
+func TestReportAbuseThrottlesAcrossRateLimitDimensions(t *testing.T) {
 	srv := newAbuseReportTestServer(t)
 	for i := 0; i < abuseReportLimitPerWindow; i++ {
 		req := validAbuseReportRequest(t, "https://web-alicesmith.reverse.example.test/bad")
@@ -265,8 +267,130 @@ func TestReportAbuseThrottlesPerIPAndReportedURL(t *testing.T) {
 	req = validAbuseReportRequest(t, "https://web-alicesmith.reverse.example.test/other")
 	rr = httptest.NewRecorder()
 	srv.routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("same reporter IP should be throttled across URLs, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestReportAbuseRateLimitKeysIncludeIPURLHostEmailHashAndRoute(t *testing.T) {
+	keys := abuseReportRateLimitKeys("203.0.113.9", resolvedReportedURL{
+		URL:      "https://web-alicesmith.reverse.example.test/bad",
+		Host:     "web-alicesmith.reverse.example.test",
+		UserName: "alice",
+		AppName:  "web",
+	}, "Reporter@Example.Test")
+
+	for _, want := range []string{
+		"ip:203.0.113.9",
+		"url:https://web-alicesmith.reverse.example.test/bad",
+		"host:web-alicesmith.reverse.example.test",
+		"route:alice/web",
+	} {
+		if !containsString(keys, want) {
+			t.Fatalf("expected rate limit keys to contain %q, got %#v", want, keys)
+		}
+	}
+	emailKeys := 0
+	for _, key := range keys {
+		if strings.HasPrefix(key, "email:") {
+			emailKeys++
+			if strings.Contains(strings.ToLower(key), "reporter@example.test") {
+				t.Fatalf("email rate limit key exposed raw address: %#v", keys)
+			}
+		}
+	}
+	if emailKeys != 1 {
+		t.Fatalf("expected exactly one hashed email key, got %#v", keys)
+	}
+}
+
+func TestReportAbuseCoalescesDuplicateReportsAndPreservesSignals(t *testing.T) {
+	srv := newAbuseReportTestServer(t)
+	first := submitAbuseReport(t, srv, map[string]string{
+		"reported_url":     "https://web-alicesmith.reverse.example.test/bad",
+		"category":         "phishing",
+		"description":      "Credential collection.",
+		"reporter_contact": "one@example.test",
+	}, "203.0.113.10")
+	second := submitAbuseReport(t, srv, map[string]string{
+		"reported_url":     "https://web-alicesmith.reverse.example.test/bad",
+		"category":         "malware",
+		"description":      "The same URL is now serving a suspicious download.",
+		"reporter_contact": "two@example.test",
+	}, "198.51.100.22")
+
+	if second["case_id"] != first["case_id"] {
+		t.Fatalf("expected duplicate report to return original case id, first=%#v second=%#v", first, second)
+	}
+	srv.stateMu.RLock()
+	defer srv.stateMu.RUnlock()
+	if len(srv.state.AbuseReports) != 1 {
+		t.Fatalf("expected duplicate report to be coalesced into one stored case, got %#v", srv.state.AbuseReports)
+	}
+	report := srv.state.AbuseReports[first["case_id"]]
+	if report.ReporterCount != 2 {
+		t.Fatalf("expected reporter count to preserve duplicate signal, got %#v", report)
+	}
+	if report.CategoryCounts["phishing"] != 1 || report.CategoryCounts["malware"] != 1 {
+		t.Fatalf("expected category counts to preserve duplicate categories, got %#v", report.CategoryCounts)
+	}
+	if report.UpdatedAt.Before(report.CreatedAt) {
+		t.Fatalf("expected duplicate to update report timestamp, got %#v", report)
+	}
+}
+
+func TestReportAbuseFormIncludesAndEnforcesSubmitTiming(t *testing.T) {
+	srv := newAbuseReportTestServer(t)
+	formReq := httptest.NewRequest(http.MethodGet, "https://reverse.example.test/report-abuse", nil)
+	formRR := httptest.NewRecorder()
+	srv.routes().ServeHTTP(formRR, formReq)
+	if formRR.Code != http.StatusOK {
+		t.Fatalf("unexpected form status: %d body=%s", formRR.Code, formRR.Body.String())
+	}
+	if !strings.Contains(formRR.Body.String(), `name="form_started_at"`) {
+		t.Fatalf("expected form to include submit timing field, got %s", formRR.Body.String())
+	}
+
+	fast := validAbuseReportForm()
+	fast.Set("form_started_at", strconv.FormatInt(time.Now().Unix(), 10))
+	req := httptest.NewRequest(http.MethodPost, "https://reverse.example.test/api/report-abuse", strings.NewReader(fast.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	srv.routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected fast form submit to be rejected, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	older := validAbuseReportForm()
+	older.Set("form_started_at", strconv.FormatInt(time.Now().Add(-minAbuseReportSubmitDelay-time.Second).Unix(), 10))
+	req = httptest.NewRequest(http.MethodPost, "https://reverse.example.test/api/report-abuse", strings.NewReader(older.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	srv.routes().ServeHTTP(rr, req)
 	if rr.Code != http.StatusCreated {
-		t.Fatalf("different reported URL should not be throttled, got %d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("expected old enough form submit to be accepted, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestReportAbuseChallengeHookCanBeRequiredByConfig(t *testing.T) {
+	srv := newAbuseReportTestServer(t)
+	srv.cfg.ReportAbuseChallengeMode = abuseReportChallengeCaptcha
+
+	req := validAbuseReportRequest(t, "https://web-alicesmith.reverse.example.test/bad")
+	rr := httptest.NewRecorder()
+	srv.routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing challenge token to be rejected, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	resp := submitAbuseReport(t, srv, map[string]string{
+		"reported_url":    "https://web-alicesmith.reverse.example.test/bad",
+		"category":        "phishing",
+		"description":     "bad",
+		"challenge_token": "captcha-ok",
+	}, "203.0.113.11")
+	if !strings.HasPrefix(resp["case_id"], "abr_") {
+		t.Fatalf("expected challenged report to be accepted, got %#v", resp)
 	}
 }
 
@@ -284,4 +408,42 @@ func validAbuseReportRequest(t *testing.T, reportedURL string) *http.Request {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Forwarded-For", "203.0.113.9")
 	return req
+}
+
+func validAbuseReportForm() url.Values {
+	return url.Values{
+		"reported_url": []string{"https://web-alicesmith.reverse.example.test/bad"},
+		"category":     []string{"phishing"},
+		"description":  []string{"bad"},
+	}
+}
+
+func submitAbuseReport(t *testing.T, srv *Server, body map[string]string, ip string) map[string]string {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://reverse.example.test/api/report-abuse", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", ip)
+	rr := httptest.NewRecorder()
+	srv.routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected report creation, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

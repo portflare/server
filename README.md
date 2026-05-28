@@ -31,6 +31,7 @@ export PORTFLARE_SERVED_BY_ENABLED=true
 export PORTFLARE_SERVED_BY_MODE=visible_and_headers
 export PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED=true
 export PORTFLARE_REPORT_ABUSE_ENABLED=true
+export PORTFLARE_REPORT_ABUSE_CHALLENGE_MODE=off
 portflare-server
 ```
 
@@ -44,6 +45,16 @@ Public deployments default to visible served-by disclosure plus response headers
 - `PORTFLARE_REPORT_ABUSE_ENABLED=true`
 
 The settings are copied into the state file on first run, displayed in `/admin` and `/api/admin/state`, and can be changed by an admin without restarting the server.
+
+The public abuse report endpoint rate-limits reports by reporter IP, reported URL, reported host, route context, and a hash of the reporter contact email when one is supplied. Duplicate reports for the same URL are coalesced into the original case while preserving reporter count and category-count signals for triage. The HTML form includes honeypot and time-to-submit fields; API clients can omit the timing field.
+
+Operators can require an external challenge hook for the report endpoint with:
+
+```bash
+export PORTFLARE_REPORT_ABUSE_CHALLENGE_MODE=captcha
+```
+
+Supported values are `off`, `captcha`, and `proof_of_work`. `captcha` requires a non-empty `challenge_token` field from an upstream captcha integration. `proof_of_work` requires a `pow_nonce` whose SHA-256 digest for `<reported-url>|<nonce>` starts with `0000`.
 
 Self-hosted deployments that do not want HTML mutation can use:
 

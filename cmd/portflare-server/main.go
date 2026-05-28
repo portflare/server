@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -47,6 +48,7 @@ type Config struct {
 	ServedByMode                  string
 	ServedByHTMLInjectionEnabled  bool
 	ReportAbuseEnabled            bool
+	ReportAbuseChallengeMode      string
 	ServedByAppDisableAllowed     bool
 	ServedByEmergencyForceVisible bool
 	TrustedProxyOnly              bool
@@ -75,6 +77,7 @@ func loadConfig() Config {
 		ServedByMode:                  envServedByMode("PORTFLARE_SERVED_BY_MODE", servedByModeVisibleAndHeaders),
 		ServedByHTMLInjectionEnabled:  envBool("PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED", true),
 		ReportAbuseEnabled:            envBool("PORTFLARE_REPORT_ABUSE_ENABLED", true),
+		ReportAbuseChallengeMode:      envAbuseReportChallengeMode("PORTFLARE_REPORT_ABUSE_CHALLENGE_MODE", abuseReportChallengeOff),
 		ServedByAppDisableAllowed:     envBool("PORTFLARE_SERVED_BY_APP_DISABLE_ALLOWED", false),
 		ServedByEmergencyForceVisible: envBool("PORTFLARE_SERVED_BY_EMERGENCY_FORCE_VISIBLE", false),
 		TrustedProxyOnly:              envBool("PORTFLARE_TRUST_AUTH_HEADERS", true),
@@ -146,25 +149,28 @@ type AuditEvent struct {
 }
 
 type AbuseReport struct {
-	ID                string            `json:"id"`
-	ReportedURL       string            `json:"reported_url"`
-	ReportedHost      string            `json:"reported_host,omitempty"`
-	ReportedPath      string            `json:"reported_path,omitempty"`
-	ReportedUserName  string            `json:"reported_user_name,omitempty"`
-	ReportedUserLabel string            `json:"reported_user_label,omitempty"`
-	ReportedAppName   string            `json:"reported_app_name,omitempty"`
-	Category          string            `json:"category"`
-	Description       string            `json:"description"`
-	Context           string            `json:"context,omitempty"`
-	ReporterContact   string            `json:"reporter_contact,omitempty"`
-	ReporterIP        string            `json:"reporter_ip"`
-	ReporterUserAgent string            `json:"reporter_user_agent,omitempty"`
-	Status            string            `json:"status"`
-	StatusUpdatedBy   string            `json:"status_updated_by,omitempty"`
-	StatusUpdatedAt   time.Time         `json:"status_updated_at,omitempty"`
-	InternalNotes     []AbuseReportNote `json:"internal_notes,omitempty"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
+	ID                  string            `json:"id"`
+	ReportedURL         string            `json:"reported_url"`
+	ReportedHost        string            `json:"reported_host,omitempty"`
+	ReportedPath        string            `json:"reported_path,omitempty"`
+	ReportedUserName    string            `json:"reported_user_name,omitempty"`
+	ReportedUserLabel   string            `json:"reported_user_label,omitempty"`
+	ReportedAppName     string            `json:"reported_app_name,omitempty"`
+	Category            string            `json:"category"`
+	Description         string            `json:"description"`
+	Context             string            `json:"context,omitempty"`
+	ReporterContact     string            `json:"reporter_contact,omitempty"`
+	ReporterContactHash string            `json:"reporter_contact_hash,omitempty"`
+	ReporterIP          string            `json:"reporter_ip"`
+	ReporterUserAgent   string            `json:"reporter_user_agent,omitempty"`
+	ReporterCount       int               `json:"reporter_count,omitempty"`
+	CategoryCounts      map[string]int    `json:"category_counts,omitempty"`
+	Status              string            `json:"status"`
+	StatusUpdatedBy     string            `json:"status_updated_by,omitempty"`
+	StatusUpdatedAt     time.Time         `json:"status_updated_at,omitempty"`
+	InternalNotes       []AbuseReportNote `json:"internal_notes,omitempty"`
+	CreatedAt           time.Time         `json:"created_at"`
+	UpdatedAt           time.Time         `json:"updated_at"`
 }
 
 type AbuseReportNote struct {
@@ -564,6 +570,29 @@ func (s *Server) loadState() error {
 			}
 		}
 	}
+	for _, report := range st.AbuseReports {
+		if report == nil {
+			continue
+		}
+		if report.ReporterCount <= 0 {
+			report.ReporterCount = 1
+			changed = true
+		}
+		if report.CategoryCounts == nil {
+			report.CategoryCounts = map[string]int{}
+			changed = true
+		}
+		if report.Category != "" && report.CategoryCounts[report.Category] == 0 {
+			report.CategoryCounts[report.Category] = report.ReporterCount
+			changed = true
+		}
+		if report.ReporterContactHash == "" {
+			if hash, ok := reporterEmailHash(report.ReporterContact); ok {
+				report.ReporterContactHash = hash
+				changed = true
+			}
+		}
+	}
 	s.state = st
 	if changed {
 		return s.saveStateLocked()
@@ -766,19 +795,23 @@ func (s *Server) handleReportAbuseForm(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.templates.ExecuteTemplate(w, "report_abuse", map[string]any{
-		"ReportedURL": strings.TrimSpace(r.URL.Query().Get("url")),
-		"Context":     strings.TrimSpace(r.URL.Query().Get("context")),
-		"Categories":  abuseReportCategories(),
+		"ReportedURL":   strings.TrimSpace(r.URL.Query().Get("url")),
+		"Context":       strings.TrimSpace(r.URL.Query().Get("context")),
+		"Categories":    abuseReportCategories(),
+		"FormStartedAt": strconv.FormatInt(time.Now().UTC().Unix(), 10),
 	})
 }
 
 type abuseReportInput struct {
-	ReportedURL     string `json:"reported_url"`
-	Category        string `json:"category"`
-	Description     string `json:"description"`
-	ReporterContact string `json:"reporter_contact"`
-	Context         string `json:"context"`
-	Website         string `json:"website"`
+	ReportedURL      string `json:"reported_url"`
+	Category         string `json:"category"`
+	Description      string `json:"description"`
+	ReporterContact  string `json:"reporter_contact"`
+	Context          string `json:"context"`
+	Website          string `json:"website"`
+	FormStartedAt    string `json:"form_started_at"`
+	ChallengeToken   string `json:"challenge_token"`
+	ProofOfWorkNonce string `json:"pow_nonce"`
 }
 
 type resolvedReportedURL struct {
@@ -815,42 +848,57 @@ func (s *Server) handleReportAbuseAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := s.validateAbuseReportChallenge(input, resolved); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	reporterIP := requestClientIP(r)
 	if reporterIP == "" {
 		reporterIP = "unknown"
 	}
 	limiter := s.ensureAbuseLimiter()
-	if !limiter.Allow(reporterIP + "|" + resolved.URL) {
+	if !limiter.AllowAll(abuseReportRateLimitKeys(reporterIP, resolved, input.ReporterContact)) {
 		writeError(w, http.StatusTooManyRequests, "too many reports; try again later")
 		return
 	}
 
 	now := time.Now().UTC()
+	reporterContact := strings.TrimSpace(input.ReporterContact)
+	reporterContactHash, _ := reporterEmailHash(reporterContact)
+	category := strings.TrimSpace(input.Category)
 	report := &AbuseReport{
-		ReportedURL:       resolved.URL,
-		ReportedHost:      resolved.Host,
-		ReportedPath:      resolved.Path,
-		ReportedUserName:  resolved.UserName,
-		ReportedUserLabel: resolved.UserLabel,
-		ReportedAppName:   resolved.AppName,
-		Category:          strings.TrimSpace(input.Category),
-		Description:       strings.TrimSpace(input.Description),
-		Context:           strings.TrimSpace(input.Context),
-		ReporterContact:   strings.TrimSpace(input.ReporterContact),
-		ReporterIP:        reporterIP,
-		ReporterUserAgent: strings.TrimSpace(r.UserAgent()),
-		Status:            abuseReportStatusNew,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		ReportedURL:         resolved.URL,
+		ReportedHost:        resolved.Host,
+		ReportedPath:        resolved.Path,
+		ReportedUserName:    resolved.UserName,
+		ReportedUserLabel:   resolved.UserLabel,
+		ReportedAppName:     resolved.AppName,
+		Category:            category,
+		Description:         strings.TrimSpace(input.Description),
+		Context:             strings.TrimSpace(input.Context),
+		ReporterContact:     reporterContact,
+		ReporterContactHash: reporterContactHash,
+		ReporterIP:          reporterIP,
+		ReporterUserAgent:   strings.TrimSpace(r.UserAgent()),
+		ReporterCount:       1,
+		CategoryCounts:      map[string]int{category: 1},
+		Status:              abuseReportStatusNew,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 
 	s.stateMu.Lock()
 	if s.state.AbuseReports == nil {
 		s.state.AbuseReports = map[string]*AbuseReport{}
 	}
-	report.ID = s.newAbuseReportIDLocked()
-	s.state.AbuseReports[report.ID] = report
+	if existing := s.findDuplicateAbuseReportLocked(report); existing != nil {
+		coalesceDuplicateAbuseReport(existing, report, now)
+		report = existing
+	} else {
+		report.ID = s.newAbuseReportIDLocked()
+		s.state.AbuseReports[report.ID] = report
+	}
 	err = s.saveStateLocked()
 	s.stateMu.Unlock()
 	if err != nil {
@@ -889,12 +937,15 @@ func parseAbuseReportInput(r *http.Request) (abuseReportInput, int, error) {
 		return input, http.StatusBadRequest, errors.New("invalid report request")
 	}
 	input = abuseReportInput{
-		ReportedURL:     r.Form.Get("reported_url"),
-		Category:        r.Form.Get("category"),
-		Description:     r.Form.Get("description"),
-		ReporterContact: r.Form.Get("reporter_contact"),
-		Context:         r.Form.Get("context"),
-		Website:         r.Form.Get("website"),
+		ReportedURL:      r.Form.Get("reported_url"),
+		Category:         r.Form.Get("category"),
+		Description:      r.Form.Get("description"),
+		ReporterContact:  r.Form.Get("reporter_contact"),
+		Context:          r.Form.Get("context"),
+		Website:          r.Form.Get("website"),
+		FormStartedAt:    r.Form.Get("form_started_at"),
+		ChallengeToken:   r.Form.Get("challenge_token"),
+		ProofOfWorkNonce: r.Form.Get("pow_nonce"),
 	}
 	return input, http.StatusOK, nil
 }
@@ -929,6 +980,9 @@ func (s *Server) validateAbuseReportInput(input abuseReportInput, r *http.Reques
 	}
 	if len(contextValue) > maxAbuseReportContextLen {
 		return resolvedReportedURL{}, fmt.Errorf("context must be at most %d bytes", maxAbuseReportContextLen)
+	}
+	if err := validateAbuseReportSubmitTiming(input.FormStartedAt); err != nil {
+		return resolvedReportedURL{}, err
 	}
 
 	resolved, err := s.resolveReportedURL(reportedURL, r)
@@ -1033,6 +1087,153 @@ func (s *Server) resolveReportedRoute(path string) (resolvedReportedURL, error) 
 	return resolved, nil
 }
 
+func validateAbuseReportSubmitTiming(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	startedUnix, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return errors.New("invalid report")
+	}
+	startedAt := time.Unix(startedUnix, 0).UTC()
+	now := time.Now().UTC()
+	if startedAt.After(now.Add(time.Minute)) {
+		return errors.New("invalid report")
+	}
+	if now.Sub(startedAt) < minAbuseReportSubmitDelay {
+		return errors.New("invalid report")
+	}
+	return nil
+}
+
+func (s *Server) validateAbuseReportChallenge(input abuseReportInput, resolved resolvedReportedURL) error {
+	mode, ok := normalizeAbuseReportChallengeMode(s.cfg.ReportAbuseChallengeMode)
+	if !ok {
+		mode = abuseReportChallengeOff
+	}
+	switch mode {
+	case abuseReportChallengeOff:
+		return nil
+	case abuseReportChallengeCaptcha:
+		if strings.TrimSpace(input.ChallengeToken) == "" {
+			return errors.New("report verification is required")
+		}
+		return nil
+	case abuseReportChallengeProofOfWork:
+		if !validAbuseReportProofOfWork(resolved.URL, input.ProofOfWorkNonce) {
+			return errors.New("report verification is required")
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func validAbuseReportProofOfWork(reportedURL, nonce string) bool {
+	nonce = strings.TrimSpace(nonce)
+	if nonce == "" || len(nonce) > 128 {
+		return false
+	}
+	sum := sha256.Sum256([]byte(reportedURL + "|" + nonce))
+	return strings.HasPrefix(hex.EncodeToString(sum[:]), abuseReportProofOfWorkPrefix)
+}
+
+func abuseReportRateLimitKeys(reporterIP string, resolved resolvedReportedURL, reporterContact string) []string {
+	keys := make([]string, 0, 5)
+	if reporterIP = strings.TrimSpace(reporterIP); reporterIP != "" {
+		keys = appendUniqueString(keys, "ip:"+reporterIP)
+	}
+	if resolved.URL != "" {
+		keys = appendUniqueString(keys, "url:"+resolved.URL)
+	}
+	if resolved.Host != "" {
+		keys = appendUniqueString(keys, "host:"+resolved.Host)
+	}
+	if resolved.UserName != "" && resolved.AppName != "" {
+		keys = appendUniqueString(keys, "route:"+resolved.UserName+"/"+resolved.AppName)
+	}
+	if hash, ok := reporterEmailHash(reporterContact); ok {
+		keys = appendUniqueString(keys, "email:"+hash)
+	}
+	return keys
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func reporterEmailHash(contact string) (string, bool) {
+	email := strings.ToLower(strings.TrimSpace(contact))
+	if email == "" || !strings.Contains(email, "@") || strings.ContainsAny(email, "\r\n") {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(email))
+	return hex.EncodeToString(sum[:]), true
+}
+
+func (s *Server) findDuplicateAbuseReportLocked(report *AbuseReport) *AbuseReport {
+	var duplicate *AbuseReport
+	for _, existing := range s.state.AbuseReports {
+		if !isDuplicateAbuseReport(existing, report) {
+			continue
+		}
+		if duplicate == nil || existing.CreatedAt.Before(duplicate.CreatedAt) || (existing.CreatedAt.Equal(duplicate.CreatedAt) && existing.ID < duplicate.ID) {
+			duplicate = existing
+		}
+	}
+	return duplicate
+}
+
+func isDuplicateAbuseReport(existing, incoming *AbuseReport) bool {
+	if existing == nil || incoming == nil || !abuseReportCanAcceptDuplicate(existing) {
+		return false
+	}
+	if existing.ReportedURL != "" && incoming.ReportedURL != "" {
+		return existing.ReportedURL == incoming.ReportedURL
+	}
+	if existing.ReportedUserName != "" && existing.ReportedAppName != "" && incoming.ReportedUserName != "" && incoming.ReportedAppName != "" {
+		return existing.ReportedUserName == incoming.ReportedUserName &&
+			existing.ReportedAppName == incoming.ReportedAppName &&
+			existing.ReportedPath == incoming.ReportedPath
+	}
+	return false
+}
+
+func abuseReportCanAcceptDuplicate(report *AbuseReport) bool {
+	switch abuseReportStatusOrDefault(report.Status) {
+	case abuseReportStatusRejected, abuseReportStatusActionedMitigated, abuseReportStatusClosed:
+		return false
+	default:
+		return true
+	}
+}
+
+func coalesceDuplicateAbuseReport(existing, incoming *AbuseReport, now time.Time) {
+	if existing.ReporterCount <= 0 {
+		existing.ReporterCount = 1
+	}
+	existing.ReporterCount++
+	if existing.CategoryCounts == nil {
+		existing.CategoryCounts = map[string]int{}
+	}
+	if existing.Category != "" && existing.CategoryCounts[existing.Category] == 0 {
+		existing.CategoryCounts[existing.Category] = 1
+	}
+	if incoming.Category != "" {
+		existing.CategoryCounts[incoming.Category]++
+	}
+	if existing.ReporterContactHash == "" && incoming.ReporterContactHash != "" {
+		existing.ReporterContactHash = incoming.ReporterContactHash
+	}
+	existing.UpdatedAt = now
+}
+
 func requestClientIP(r *http.Request) string {
 	for _, raw := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
 		if ip := strings.TrimSpace(raw); ip != "" {
@@ -1090,7 +1291,22 @@ func newAbuseReportLimiter(limit int, window time.Duration) *abuseReportLimiter 
 }
 
 func (l *abuseReportLimiter) Allow(key string) bool {
+	return l.AllowAll([]string{key})
+}
+
+func (l *abuseReportLimiter) AllowAll(keys []string) bool {
 	if l == nil {
+		return true
+	}
+	unique := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		unique = appendUniqueString(unique, key)
+	}
+	if len(unique) == 0 {
 		return true
 	}
 	now := l.now()
@@ -1098,18 +1314,21 @@ func (l *abuseReportLimiter) Allow(key string) bool {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	recent := l.entries[key][:0]
-	for _, at := range l.entries[key] {
-		if at.After(cutoff) {
-			recent = append(recent, at)
+	for _, key := range unique {
+		recent := l.entries[key][:0]
+		for _, at := range l.entries[key] {
+			if at.After(cutoff) {
+				recent = append(recent, at)
+			}
+		}
+		l.entries[key] = recent
+		if len(recent) >= l.limit {
+			return false
 		}
 	}
-	if len(recent) >= l.limit {
-		l.entries[key] = recent
-		return false
+	for _, key := range unique {
+		l.entries[key] = append(l.entries[key], now)
 	}
-	recent = append(recent, now)
-	l.entries[key] = recent
 	return true
 }
 
@@ -1922,6 +2141,8 @@ func (s *Server) abuseReportSummaryLocked(report *AbuseReport) map[string]any {
 		"reported_user_label": report.ReportedUserLabel,
 		"reported_app_name":   report.ReportedAppName,
 		"category":            report.Category,
+		"category_counts":     report.CategoryCounts,
+		"reporter_count":      abuseReportReporterCount(report),
 		"status":              abuseReportStatusOrDefault(report.Status),
 		"created_at":          report.CreatedAt,
 		"updated_at":          report.UpdatedAt,
@@ -1930,6 +2151,13 @@ func (s *Server) abuseReportSummaryLocked(report *AbuseReport) map[string]any {
 		summary["current_app_status"] = appReportStatus(app)
 	}
 	return summary
+}
+
+func abuseReportReporterCount(report *AbuseReport) int {
+	if report == nil || report.ReporterCount <= 0 {
+		return 1
+	}
+	return report.ReporterCount
 }
 
 func (s *Server) currentAppReportContextLocked(app *App) map[string]any {
@@ -2622,6 +2850,12 @@ const (
 	maxAbuseReportNoteLen        = 2000
 	abuseReportLimitPerWindow    = 5
 	abuseReportThrottleWindow    = 10 * time.Minute
+	minAbuseReportSubmitDelay    = 2 * time.Second
+
+	abuseReportChallengeOff         = "off"
+	abuseReportChallengeCaptcha     = "captcha"
+	abuseReportChallengeProofOfWork = "proof_of_work"
+	abuseReportProofOfWorkPrefix    = "0000"
 
 	abuseReportStatusNew               = "new"
 	abuseReportStatusTriagedReviewing  = "triaged_reviewing"
@@ -2799,6 +3033,26 @@ func envServedByMode(key, fallback string) string {
 		return mode
 	}
 	return fallback
+}
+
+func envAbuseReportChallengeMode(key, fallback string) string {
+	if mode, ok := normalizeAbuseReportChallengeMode(env(key, fallback)); ok {
+		return mode
+	}
+	return fallback
+}
+
+func normalizeAbuseReportChallengeMode(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", abuseReportChallengeOff:
+		return abuseReportChallengeOff, true
+	case abuseReportChallengeCaptcha:
+		return abuseReportChallengeCaptcha, true
+	case "pow", "proof-of-work", abuseReportChallengeProofOfWork:
+		return abuseReportChallengeProofOfWork, true
+	default:
+		return "", false
+	}
 }
 
 func servedBySettingWarnings(settings servedBySettings) []string {
@@ -3770,6 +4024,7 @@ const dashboardTemplates = `
         <input type="text" name="website" tabindex="-1" autocomplete="off">
       </label>
       <input type="hidden" name="context" value="{{.Context}}">
+      <input type="hidden" name="form_started_at" value="{{.FormStartedAt}}">
       <button type="submit">Submit report</button>
     </form>
   </body>

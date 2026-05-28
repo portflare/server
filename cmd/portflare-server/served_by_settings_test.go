@@ -20,6 +20,7 @@ func TestLoadConfigServedByDefaultsAndEnvOverrides(t *testing.T) {
 		"PORTFLARE_SERVED_BY_MODE",
 		"PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED",
 		"PORTFLARE_REPORT_ABUSE_ENABLED",
+		"PORTFLARE_REPORT_ABUSE_CHALLENGE_MODE",
 		"PORTFLARE_SERVED_BY_APP_DISABLE_ALLOWED",
 		"PORTFLARE_SERVED_BY_EMERGENCY_FORCE_VISIBLE",
 	} {
@@ -27,7 +28,7 @@ func TestLoadConfigServedByDefaultsAndEnvOverrides(t *testing.T) {
 	}
 
 	cfg := loadConfig()
-	if !cfg.ServedByEnabled || cfg.ServedByMode != servedByModeVisibleAndHeaders || !cfg.ServedByHTMLInjectionEnabled || !cfg.ReportAbuseEnabled || cfg.ServedByAppDisableAllowed || cfg.ServedByEmergencyForceVisible {
+	if !cfg.ServedByEnabled || cfg.ServedByMode != servedByModeVisibleAndHeaders || !cfg.ServedByHTMLInjectionEnabled || !cfg.ReportAbuseEnabled || cfg.ReportAbuseChallengeMode != abuseReportChallengeOff || cfg.ServedByAppDisableAllowed || cfg.ServedByEmergencyForceVisible {
 		t.Fatalf("unexpected served-by defaults: %#v", cfg)
 	}
 
@@ -35,11 +36,12 @@ func TestLoadConfigServedByDefaultsAndEnvOverrides(t *testing.T) {
 	t.Setenv("PORTFLARE_SERVED_BY_MODE", servedByModeHeadersOnly)
 	t.Setenv("PORTFLARE_SERVED_BY_HTML_INJECTION_ENABLED", "false")
 	t.Setenv("PORTFLARE_REPORT_ABUSE_ENABLED", "false")
+	t.Setenv("PORTFLARE_REPORT_ABUSE_CHALLENGE_MODE", abuseReportChallengeProofOfWork)
 	t.Setenv("PORTFLARE_SERVED_BY_APP_DISABLE_ALLOWED", "true")
 	t.Setenv("PORTFLARE_SERVED_BY_EMERGENCY_FORCE_VISIBLE", "true")
 
 	cfg = loadConfig()
-	if cfg.ServedByEnabled || cfg.ServedByMode != servedByModeHeadersOnly || cfg.ServedByHTMLInjectionEnabled || cfg.ReportAbuseEnabled || !cfg.ServedByAppDisableAllowed || !cfg.ServedByEmergencyForceVisible {
+	if cfg.ServedByEnabled || cfg.ServedByMode != servedByModeHeadersOnly || cfg.ServedByHTMLInjectionEnabled || cfg.ReportAbuseEnabled || cfg.ReportAbuseChallengeMode != abuseReportChallengeProofOfWork || !cfg.ServedByAppDisableAllowed || !cfg.ServedByEmergencyForceVisible {
 		t.Fatalf("unexpected served-by env overrides: %#v", cfg)
 	}
 }
