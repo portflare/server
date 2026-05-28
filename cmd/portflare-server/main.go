@@ -452,6 +452,7 @@ func (s *Server) routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/readyz", handleReadyz("portflare-server"))
+	mux.HandleFunc(learnMorePath, s.handleLearnMorePage)
 	mux.HandleFunc("/api/register", s.handleRegister)
 	mux.HandleFunc("/connect", s.handleConnect)
 	mux.HandleFunc("/ws/ui", s.handleUIWebSocket)
@@ -591,6 +592,18 @@ func (s *Server) handleHostAware(w http.ResponseWriter, r *http.Request) {
 		"user_url_example":   fmt.Sprintf("https://<user-label>.%s", s.cfg.PublicBaseDomain),
 		"app_url_example":    fmt.Sprintf("https://<app>-<user-label>.%s", s.cfg.PublicBaseDomain),
 		"local_path_example": "/r/<user>/<app>",
+	})
+}
+
+func (s *Server) handleLearnMorePage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "learn_more", map[string]any{
+		"BaseDomain":     s.cfg.PublicBaseDomain,
+		"ReportAbuseURL": reportPath,
 	})
 }
 
@@ -2142,6 +2155,35 @@ func requestScheme(r *http.Request) string {
 }
 
 const dashboardTemplates = `
+{{define "learn_more"}}
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>About Portflare</title>
+    <style>
+      body { color: #17202a; font-family: sans-serif; line-height: 1.55; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+      a { color: #0b5cab; }
+      code { background: #f5f5f5; padding: .15rem .3rem; }
+      .cta { display: inline-block; margin-top: .5rem; padding: .65rem .85rem; border: 1px solid #0b5cab; color: #0b5cab; text-decoration: none; }
+      .muted { color: #5f6b76; }
+    </style>
+  </head>
+  <body>
+    <h1>About Portflare</h1>
+    <p>Portflare routes public requests to independently operated apps. App owners connect their own services to Portflare, and approved apps can receive public app URLs such as <code>https://&lt;app&gt;-&lt;user-label&gt;.{{.BaseDomain}}</code> or <code>/r/&lt;user&gt;/&lt;app&gt;</code>.</p>
+
+    <h2>What the served-by notice means</h2>
+    <p>A <strong>Served by Portflare</strong> notice means the page reached you through Portflare routing infrastructure. Portflare does not create, review, or endorse the app content, and the app operator remains responsible for what the app serves.</p>
+
+    <h2>Report abuse</h2>
+    <p>If a public Portflare URL appears to host phishing, malware, scams, spam, unauthorized private content, or other abusive material, report the URL and include enough context for review.</p>
+    <p><a class="cta" href="{{.ReportAbuseURL}}">Report abuse</a></p>
+    <p class="muted">Do not include passwords, API keys, private tokens, or other secrets in an abuse report.</p>
+  </body>
+</html>
+{{end}}
+
 {{define "admin"}}
 <!doctype html>
 <html>

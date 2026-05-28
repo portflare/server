@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"html/template"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,6 +48,54 @@ func TestReadyzRejectsNonGet(t *testing.T) {
 	handleReadyz("portflare-server").ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected method not allowed, got %d", rr.Code)
+	}
+}
+
+func TestLearnMorePageIsPublicAndExplainsServedByNotice(t *testing.T) {
+	tpls, err := template.New("pages").Parse(dashboardTemplates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{
+		cfg:       Config{PublicBaseDomain: "reverse.example.test", AdminUsers: map[string]struct{}{"admin": {}}},
+		logger:    slog.Default(),
+		templates: tpls,
+		state: State{
+			Users: map[string]*User{
+				"alice": {UserName: "alice", PublicUserLabel: "alice", Email: "alice@example.test", APIKey: "pf_secret"},
+			},
+			Apps: map[string]*App{},
+		},
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "https://reverse.example.test/about-portflare", nil)
+
+	srv.routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("expected html response, got headers=%v", rr.Header())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"Portflare routes public requests to independently operated apps",
+		"Portflare does not create, review, or endorse the app content",
+		"public app URLs",
+		"Served by Portflare",
+		`href="/report-abuse"`,
+		"Report abuse",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected learn-more page to contain %q, got %s", want, body)
+		}
+	}
+	for _, secret := range []string{"pf_secret", "alice@example.test", "admin_url_example"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("learn-more page exposed private/internal detail %q in %s", secret, body)
+		}
 	}
 }
 
