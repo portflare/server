@@ -573,7 +573,10 @@ func TestPrepareProxiedResponseInjectsEligibleHTMLGet(t *testing.T) {
 		BodyBase64: base64.StdEncoding.EncodeToString([]byte(upstreamBody)),
 	}
 
-	prepared, err := prepareProxiedResponse(req, resp)
+	prepared, err := prepareProxiedResponse(req, resp, servedByAffordance{
+		LearnMoreURL:   "https://reverse.example.test/about-portflare",
+		ReportAbuseURL: "https://reverse.example.test/report-abuse?url=https%3A%2F%2Fweb-alice.example.test%2Fpage&context=served-by+banner%3B+app%3Dweb%3B+public_user%3Dalice",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +584,20 @@ func TestPrepareProxiedResponseInjectsEligibleHTMLGet(t *testing.T) {
 	if prepared.decision != responseDecorationHTMLInject {
 		t.Fatalf("expected html injection decision, got %s", prepared.decision)
 	}
-	if !strings.Contains(body, "Served by Portflare") || strings.Index(body, "Served by Portflare") > strings.Index(strings.ToLower(body), "</body>") {
+	for _, want := range []string{
+		"Served by Portflare",
+		">Learn more</a>",
+		">Report abuse</a>",
+		`href="https://reverse.example.test/about-portflare"`,
+		`href="https://reverse.example.test/report-abuse?url=https%3A%2F%2Fweb-alice.example.test%2Fpage&amp;context=served-by+banner%3B+app%3Dweb%3B+public_user%3Dalice"`,
+		`role="complementary"`,
+		`aria-label="Portflare service notice"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected served-by markup to contain %q, got %q", want, body)
+		}
+	}
+	if strings.Index(body, "Served by Portflare") > strings.Index(strings.ToLower(body), "</body>") {
 		t.Fatalf("expected served-by markup before closing body, got %q", body)
 	}
 	if prepared.headers.Get("X-Upstream") != "ok" || prepared.headers.Get("X-Portflare-Served-By") != "Portflare" {
@@ -592,6 +608,52 @@ func TestPrepareProxiedResponseInjectsEligibleHTMLGet(t *testing.T) {
 	}
 	if prepared.headers.Get("ETag") != "" || prepared.headers.Get("Last-Modified") != "" {
 		t.Fatalf("expected stale validators removed, got %v", prepared.headers)
+	}
+}
+
+func TestInjectServedByMarkupHandlesHTMLTagVariantsAndFallback(t *testing.T) {
+	affordance := servedByAffordance{
+		LearnMoreURL:   "https://reverse.example.test/about-portflare",
+		ReportAbuseURL: "https://reverse.example.test/report-abuse?url=https%3A%2F%2Fweb-alice.example.test%2F",
+	}
+	tests := []struct {
+		name       string
+		body       string
+		wantBefore string
+	}{
+		{
+			name:       "uppercase body",
+			body:       "<HTML><BODY><main>Hello</main></BODY></HTML>",
+			wantBefore: "</BODY>",
+		},
+		{
+			name:       "html without body",
+			body:       "<html><main>Hello</main></html>",
+			wantBefore: "</html>",
+		},
+		{
+			name:       "append fallback",
+			body:       "<main>Hello</main>",
+			wantBefore: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(injectServedByMarkup([]byte(tt.body), affordance))
+			if !strings.Contains(got, "Served by Portflare") || !strings.Contains(got, "Learn more") || !strings.Contains(got, "Report abuse") {
+				t.Fatalf("expected complete served-by affordance in %q", got)
+			}
+			if tt.wantBefore == "" {
+				if !strings.HasSuffix(got, servedByMarkup(affordance)) {
+					t.Fatalf("expected safe append fallback, got %q", got)
+				}
+				return
+			}
+			if strings.Index(got, "Served by Portflare") > strings.Index(got, tt.wantBefore) {
+				t.Fatalf("expected served-by markup before %q, got %q", tt.wantBefore, got)
+			}
+		})
 	}
 }
 
@@ -678,7 +740,7 @@ func TestPrepareProxiedResponseHeaderOnlyDecisionMatrix(t *testing.T) {
 				Headers:    tt.headers,
 				BodyBase64: base64.StdEncoding.EncodeToString([]byte(htmlBody)),
 			}
-			prepared, err := prepareProxiedResponse(req, resp)
+			prepared, err := prepareProxiedResponse(req, resp, testServedByAffordance())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -717,7 +779,7 @@ func TestPrepareProxiedResponseSkipsUpgrades(t *testing.T) {
 		BodyBase64: base64.StdEncoding.EncodeToString(nil),
 	}
 
-	prepared, err := prepareProxiedResponse(req, resp)
+	prepared, err := prepareProxiedResponse(req, resp, testServedByAffordance())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -755,6 +817,17 @@ func TestProxyToAppWritesInjectedResponseAfterClassification(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "Served by Portflare") {
 		t.Fatalf("expected injected served-by markup, got %q", rr.Body.String())
+	}
+	for _, want := range []string{
+		">Learn more</a>",
+		">Report abuse</a>",
+		`href="https://reverse.example.test/about-portflare"`,
+		"context=served-by+banner%3B+app%3Dweb%3B+public_user%3Dalicesmith",
+		"url=https%3A%2F%2Fweb-alicesmith.reverse.example.test%2F",
+	} {
+		if !strings.Contains(rr.Body.String(), want) {
+			t.Fatalf("expected injected markup to contain %q, got %q", want, rr.Body.String())
+		}
 	}
 	if rr.Header().Get("ETag") != "" {
 		t.Fatalf("expected stale etag removed, got %v", rr.Header())
@@ -802,6 +875,9 @@ func assertPortflareFallbackHeaders(t *testing.T, headers http.Header, currentUR
 	if got := parsedReportURL.Query().Get("url"); got != currentURL {
 		t.Fatalf("expected report URL to encode current URL %q, got %q in %q", currentURL, got, reportURL)
 	}
+	if got := parsedReportURL.Query().Get("context"); got != "served-by banner; app="+appName+"; public_user="+publicUserLabel {
+		t.Fatalf("expected safe route context in report URL, got %q in %q", got, reportURL)
+	}
 	if strings.Contains(reportURL, currentURL) || !strings.Contains(reportURL, neturl.QueryEscape(currentURL)) {
 		t.Fatalf("report URL did not safely encode current URL: %q", reportURL)
 	}
@@ -820,6 +896,13 @@ func assertHeaderValuesContain(t *testing.T, values []string, want string) {
 		}
 	}
 	t.Fatalf("expected header values %v to contain %q", values, want)
+}
+
+func testServedByAffordance() servedByAffordance {
+	return servedByAffordance{
+		LearnMoreURL:   "https://reverse.example.test/about-portflare",
+		ReportAbuseURL: "https://reverse.example.test/report-abuse?url=https%3A%2F%2Fweb-alice.example.test%2Fpage&context=served-by+banner%3B+app%3Dweb%3B+public_user%3Dalice",
+	}
 }
 
 func newProxyTestServer(t *testing.T, store TrafficStore, respond func(TunnelRequest) TunnelResponse) (*Server, func()) {

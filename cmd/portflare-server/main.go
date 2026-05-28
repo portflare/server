@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"log/slog"
@@ -1719,7 +1720,12 @@ type preparedProxiedResponse struct {
 	decision responseDecorationDecision
 }
 
-func prepareProxiedResponse(r *http.Request, resp TunnelResponse) (preparedProxiedResponse, error) {
+type servedByAffordance struct {
+	LearnMoreURL   string
+	ReportAbuseURL string
+}
+
+func prepareProxiedResponse(r *http.Request, resp TunnelResponse, affordance servedByAffordance) (preparedProxiedResponse, error) {
 	status := resp.StatusCode
 	if status == 0 {
 		status = http.StatusOK
@@ -1735,7 +1741,7 @@ func prepareProxiedResponse(r *http.Request, resp TunnelResponse) (preparedProxi
 	payloadChanged := false
 
 	if decision == responseDecorationHTMLInject {
-		body = injectServedByMarkup(payload)
+		body = injectServedByMarkup(payload, affordance)
 		payloadChanged = true
 	}
 	if !responseCanHaveBody(r.Method, status) {
@@ -1875,8 +1881,8 @@ func isHTMLContentType(contentType string) bool {
 	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
 }
 
-func injectServedByMarkup(payload []byte) []byte {
-	const markup = `<div data-portflare-served-by="true" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;padding:8px 10px;border:1px solid #9ca3af;background:#ffffff;color:#111827;font:13px/1.4 sans-serif">Served by Portflare</div>`
+func injectServedByMarkup(payload []byte, affordance servedByAffordance) []byte {
+	markup := servedByMarkup(affordance)
 	body := string(payload)
 	lower := strings.ToLower(body)
 	if idx := strings.LastIndex(lower, "</body>"); idx >= 0 {
@@ -1888,25 +1894,57 @@ func injectServedByMarkup(payload []byte) []byte {
 	return []byte(body + markup)
 }
 
+func servedByMarkup(affordance servedByAffordance) string {
+	learnMoreURL := html.EscapeString(affordance.LearnMoreURL)
+	reportAbuseURL := html.EscapeString(affordance.ReportAbuseURL)
+	return `<aside data-portflare-served-by="true" role="complementary" aria-label="Portflare service notice" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;gap:8px;align-items:center;max-width:min(92vw,360px);padding:8px 10px;border:1px solid #9ca3af;background:#ffffff;color:#111827;font:13px/1.4 sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.16)">` +
+		`<span>Served by Portflare</span>` +
+		`<a href="` + learnMoreURL + `" style="color:#1d4ed8;text-decoration:underline">Learn more</a>` +
+		`<a href="` + reportAbuseURL + `" style="color:#b91c1c;text-decoration:underline">Report abuse</a>` +
+		`</aside>`
+}
+
 func (s *Server) addPortflareFallbackHeaders(headers http.Header, r *http.Request, appName, publicUserLabel string) {
 	if isUpgradeRequest(r) {
 		return
 	}
-	serviceBaseURL := s.publicServiceBaseURL(r)
-	learnMoreURL := serviceBaseURL + learnMorePath
-	reportURL := serviceBaseURL + reportPath + "?url=" + neturl.QueryEscape(publicRequestURL(r))
+	affordance := s.servedByAffordance(r, appName, publicUserLabel)
 
 	headers.Set(servedByHeaderName, servedByHeaderValue)
-	headers.Set(learnMoreHeaderName, learnMoreURL)
-	headers.Set(reportAbuseHeaderName, reportURL)
+	headers.Set(learnMoreHeaderName, affordance.LearnMoreURL)
+	headers.Set(reportAbuseHeaderName, affordance.ReportAbuseURL)
 	if appName = slug(appName); appName != "" {
 		headers.Set(appHeaderName, appName)
 	}
 	if isSafePublicUserLabel(publicUserLabel) {
 		headers.Set(userHeaderName, publicUserLabel)
 	}
-	headers.Add("Link", fmt.Sprintf("<%s>; rel=\"learn-more\"", learnMoreURL))
-	headers.Add("Link", fmt.Sprintf("<%s>; rel=\"report-abuse\"", reportURL))
+	headers.Add("Link", fmt.Sprintf("<%s>; rel=\"learn-more\"", affordance.LearnMoreURL))
+	headers.Add("Link", fmt.Sprintf("<%s>; rel=\"report-abuse\"", affordance.ReportAbuseURL))
+}
+
+func (s *Server) servedByAffordance(r *http.Request, appName, publicUserLabel string) servedByAffordance {
+	serviceBaseURL := s.publicServiceBaseURL(r)
+	query := neturl.Values{}
+	query.Set("url", publicRequestURL(r))
+	if contextValue := servedByRouteContext(appName, publicUserLabel); contextValue != "" {
+		query.Set("context", contextValue)
+	}
+	return servedByAffordance{
+		LearnMoreURL:   serviceBaseURL + learnMorePath,
+		ReportAbuseURL: serviceBaseURL + reportPath + "?" + query.Encode(),
+	}
+}
+
+func servedByRouteContext(appName, publicUserLabel string) string {
+	parts := []string{"served-by banner"}
+	if appName = slug(appName); appName != "" {
+		parts = append(parts, "app="+appName)
+	}
+	if isSafePublicUserLabel(publicUserLabel) {
+		parts = append(parts, "public_user="+publicUserLabel)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (s *Server) publicServiceBaseURL(r *http.Request) string {
@@ -2019,7 +2057,8 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, userName, ap
 			writeError(w, http.StatusBadGateway, resp.Error)
 			return
 		}
-		prepared, err := prepareProxiedResponse(r, resp)
+		affordance := s.servedByAffordance(r, appName, publicUserLabel)
+		prepared, err := prepareProxiedResponse(r, resp, affordance)
 		if err != nil {
 			s.recordTraffic(userName, appName, http.StatusBadGateway, bytesIn, 0, time.Since(started), true)
 			s.addPortflareFallbackHeaders(w.Header(), r, appName, publicUserLabel)
