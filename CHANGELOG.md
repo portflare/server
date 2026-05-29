@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.1](https://github.com/portflare/server/compare/v0.2.0...v0.2.1) (2026-05-29)
+
+
+### Features
+
+* add admin abuse report workflow ([56220e6](https://github.com/portflare/server/commit/56220e68193d715c406af60e45ea7b76d2b46a69))
+* add per-app served-by override policy ([6257693](https://github.com/portflare/server/commit/625769322b1de81fa7cd6412e61c8676a3e16e55))
+* add public Portflare learn-more page ([eeb95ab](https://github.com/portflare/server/commit/eeb95ab99c6bfebeb5a25bbec7169117c83974bb))
+
+
+### Bug Fixes
+
+* harden abuse report intake ([8495f3c](https://github.com/portflare/server/commit/8495f3c94aca5c20cb7bab8a471cf881b2285874))
+
 ## [0.2.0](https://github.com/portflare/server/compare/v0.1.1...v0.2.0) (2026-05-13)
 
 
